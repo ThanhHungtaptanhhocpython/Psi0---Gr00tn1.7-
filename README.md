@@ -1,4 +1,4 @@
-# Ψ₀ + SONIC: G1 gắp hộp đặt vào khay
+# Ψ₀ + SONIC: G1 gắp vật đặt vào khay
 
 Bộ công cụ để huấn luyện [Ψ₀ (Psi0)](https://github.com/physical-superintelligence-lab/Psi0) cho task
 **box pick-and-place** trên robot Unitree G1 (Dex3). Robot gắp hộp trên bệ, đứng dậy, đi tới bàn, đặt hộp vào khay rồi
@@ -11,10 +11,18 @@ Repo gồm:
 3. **Finetune Ψ₀ trên Colab** (L4 hoặc G4), checkpoint lưu lên Google Drive.
 4. **Server policy trên Colab + mô phỏng MuJoCo trên máy local** để đánh giá closed-loop.
 
-Repo chỉ chứa phần thêm vào. Nó chạy bên trong một bản checkout của Psi0 gốc, đặt đúng hai thư mục:
+Có hai task:
+
+- **`box_pnp`**: gắp hộp trên bệ, chạy với SONIC 1.0. Có dataset 140 episode và model đã finetune.
+- **`can_pnp`** (mới): ngồi xổm nhặt lon trên sàn cạnh chân phải, đứng dậy, đi tới bàn, đặt lon vào khay. Task này **bắt buộc
+  dùng SONIC 1.1**, vì SONIC 1.0 không với tới được vật nằm ở độ cao sàn. Xem
+  [scripts/datagen/can_pnp/README.md](scripts/datagen/can_pnp/README.md).
+
+Repo chỉ chứa phần thêm vào. Nó chạy bên trong một bản checkout của Psi0 gốc, đặt đúng các thư mục sau:
 
 ```
-scripts/datagen/box_pnp/    code sinh dữ liệu, export, đánh giá, notebook Colab
+scripts/datagen/box_pnp/    task hộp: code sinh dữ liệu, export, đánh giá, notebook Colab
+scripts/datagen/can_pnp/    task lon trên sàn (SONIC 1.1): sinh dữ liệu, export, đánh giá
 docs/sonic_pick_can/        ghi chú: pipeline, kế hoạch finetune/kiểm thử, báo cáo các lần chạy
 ```
 
@@ -26,8 +34,10 @@ cd Psi0
 git checkout 4f3720d45e102b36d7c3e9465ab8062274170518
 git submodule update --init third_party/GR00T-WholeBodyControl
 git -C third_party/GR00T-WholeBodyControl lfs pull     # model G1 (MJCF), ONNX của SONIC
+# chỉ cần cho can_pnp: SONIC 1.1 -> gear_sonic_deploy/policy/sonic_v1_1/
+(cd third_party/GR00T-WholeBodyControl && python download_from_hf.py --sonic-v1-1)
 
-# chép hai thư mục của repo này vào cùng vị trí
+# chép các thư mục của repo này vào cùng vị trí
 git clone https://github.com/ndhoang2k5/psi0.git /tmp/psi0-boxpnp
 cp -r /tmp/psi0-boxpnp/scripts/datagen scripts/
 mkdir -p docs && cp -r /tmp/psi0-boxpnp/docs/sonic_pick_can docs/
