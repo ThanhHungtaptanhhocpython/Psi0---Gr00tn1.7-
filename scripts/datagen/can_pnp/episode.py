@@ -61,8 +61,10 @@ INSTRUCTION = ("Squat down, pick up the can next to your right foot with your ri
 # fingers down, thumb towards the robot's left (+y); rotated by the box yaw at runtime
 R_GRASP = np.column_stack([[0, 0, -1.0], [0, 1.0, 0], [1.0, 0, 0]])
 SUBSTEPS = int(round(CTRL_DT / SIM_DT))  # 4
-GRASP_BELOW_RIM = 0.025                  # m, pinch pocket centre below the can rim (as high as the pocket allows:
-                                         # the floor-level can is at the limit of SONIC's reach)
+GRASP_BELOW_RIM = 0.010                  # m, pinch pocket centre below the can rim. The floor-level can is beyond
+                                         # SONIC 1.1's reach: aiming lower made the reach servo push the hand down
+                                         # until the squat lurched and the feet slid. 0.025 -> 0/48 fresh seeds,
+                                         # 0.015 -> 5/48, 0.010 -> 8/48
 
 
 class EpisodeFailed(Exception):
@@ -134,11 +136,15 @@ class Config:
     grasp_squeeze: float = 0.15          # rad, finger command past the measured angle once the box is held
                                          # (0 = keep closing to RIGHT_HAND_CLOSED)
     lift_height: float = 0.09            # LIFT: raise the grasp point 8-10 cm ...
-    lift_pullback: float = 0.07          # ... and pull it towards the robot (away from the table edge)
+    lift_pullback: float = 0.0           # ... and pull it towards the robot (0.07 dragged the can into the right
+                                         # knee in 11/11 episodes) ...
+    lift_out: float = 0.05               # ... and this far out to the right (the crouched right knee sits right
+                                         # above the can; 0.08 cleared it but the robot fell in 4/11)
     lift_from_reference: bool = True    # offset applied to the reference hand (keeps the tracking compensation)
     raise_torso: float = 0.10            # RAISE_TORSO (after LIFT): pelvis this much higher ...
     raise_hand: float = 0.14             # ... and the held box this much higher, so TURN_BACK swings the box
                                          # over the knees (still crouched it hit the legs in 8/8 episodes)
+    raise_out: float = 0.03              # ... and this much further out to the right (clear of the knee)
     raise_time: float = 1.0
     regrasp: bool = False                # scripted failed first grasp: reach off target, close WITHOUT the grasp
                                          # assist, raise the hand -> the box slips out of the fingers; open, back
@@ -149,8 +155,9 @@ class Config:
     slip_lift: float = 0.05              # SLIP: hand raised this much with the fingers closed
     slip_max_tilt_deg: float = 15.0      # the can must still stand on the floor after the slip ...
     slip_max_shift: float = 0.03         # ... within this distance of where it stood
-    carry_box_pos: tuple = (0.18, -0.22, 0.67)   # box center: feet frame (x fwd, y left), world z;
-                                                 # 7-12 cm above the 0.50-0.55 m tabletop
+    carry_box_pos: tuple = (0.18, -0.27, 0.67)   # box center: feet frame (x fwd, y left), world z;
+                                                 # 7-12 cm above the 0.50-0.55 m tabletop; y -0.22 left the
+                                                 # can 1-2 cm off the right thigh and it rubbed it in STAND_UP
     w_hold_rot: float = 3.0              # IK weight holding the grasp wrist orientation (moderate)
     hold_actual_wrist: bool = True       # from STAND_UP on, hold the MEASURED wrist orientation at GRASP
                                          # instead of the reference one, which carries SONIC's crouch tracking
@@ -219,6 +226,8 @@ class Config:
     liftoff_min_ticks: int = 5           # a foot off the floor for >= 0.1 s counts as a lift-off
     reject_prewalk_liftoff: bool = True  # any foot lift-off before the walk rejects the episode
     reject_leg_can_contact: bool = True  # a knee/shin touching the can before the grasp (it tips it over)
+    reject_held_can_body_contact: bool = True  # the held can touching the robot anywhere but the hand (the
+                                               # policy would learn to rub it along the legs)
     slip_tol: float = 0.025              # m, box drift relative to the wrist while grasped
     table_force_tol: float = 120.0       # N, robot<->table contact force
     home_joint_tol: float = 0.12         # rad, mean |q - default|
@@ -509,6 +518,8 @@ class Episode:
                                                                  self.ix.box_geom), "min")
         if c["box_body"]:
             self._pstat("box_body_ticks", "n", 1, "sum")
+            if self.grasped and self.cfg.reject_held_can_body_contact:
+                raise EpisodeFailed("held_can_touched_body")
         # grasp integrity
         if self.grasped:
             drift = self._grasp_slip()
@@ -821,10 +832,11 @@ class Episode:
         yaw_ref = self._feet_frame(self.ref_feet())[1] + self._seed_q()[ix.body_qadr[12]]   # the turned torso heading
         if cfg.lift_from_reference:
             gp_ref = self.ik.grasp_point(self.ik.fk(self._seed_q())).copy()
-            lift_ref = gp_ref + rot_z(yaw_ref) @ np.array([-cfg.lift_pullback, 0, cfg.lift_height])
+            lift_ref = gp_ref + rot_z(yaw_ref) @ np.array([-cfg.lift_pullback, -cfg.lift_out, cfg.lift_height])
         else:   # legacy: offset from the actual hand
             yaw = yaw_of(d.qpos[3:7])
-            lift_ref = self.to_ref(self.grasp_point() + rot_z(yaw) @ np.array([-cfg.lift_pullback, 0, cfg.lift_height]))
+            lift_ref = self.to_ref(self.grasp_point() + rot_z(yaw) @ np.array([-cfg.lift_pullback, -cfg.lift_out,
+                                                                               cfg.lift_height]))
         q_l, _ = self.ik.solve(self._seed_q(), IKTargets(feet=self.ref_feet(), com_xy=None, hand_pos=lift_ref,
                                                        hand_R=self._hold_R(), posture=nom, posture_w=pw, w_feet=100,
                                                        w_com=10, w_hand_rot=cfg.w_hold_rot, pelvis_yaw=pelvis_yaw))
@@ -845,7 +857,8 @@ class Episode:
         dref = self.ik.fk(q0)
         pz, gp_ref = float(dref.xpos[ix.pelvis][2]), self.ik.grasp_point(dref).copy()
         q_r, _ = self.ik.solve(q0, IKTargets(feet=self.ref_feet(), com_xy=self._support_center(),
-                                            hand_pos=gp_ref + np.array([0, 0, cfg.raise_hand]), hand_R=self._hold_R(),
+                                            hand_pos=gp_ref + rot_z(yaw_ref) @ np.array([0, -cfg.raise_out, cfg.raise_hand]),
+                                            hand_R=self._hold_R(),
                                             pelvis_z=pz + cfg.raise_torso, pelvis_yaw=pelvis_yaw,
                                             posture=q0[ix.body_qadr], posture_w=pw, w_feet=100, w_com=10,
                                             w_pelvis=10, w_hand_rot=cfg.w_hold_rot), iters=400)
