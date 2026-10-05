@@ -57,6 +57,8 @@ def write_video(path: Path, frames: list[np.ndarray], fps: int = RECORD_FPS):
 class DatasetWriter:
     def __init__(self, root: str | Path, sonic_dir: Path, planner_path: Path):
         self.root = Path(root)
+        from sonic_policy import sonic_version
+        self.sonic_variant, self.sonic_version = Path(sonic_dir).name, sonic_version(sonic_dir)
         (self.root / "data" / CHUNK).mkdir(parents=True, exist_ok=True)
         (self.root / "meta").mkdir(parents=True, exist_ok=True)
         self.sonic_hashes = {
@@ -122,6 +124,7 @@ class DatasetWriter:
                                               for k, v in result.info.items()},
             "phase_names": PHASES, "sonic_onnx_sha256": self.sonic_hashes,
             "token_rate_hz": cfg.token_rate_hz, "grasp_assist": "soft weld, engaged on thumb+finger contact",
+            "sonic_variant": self.sonic_variant, "sonic_version": self.sonic_version,
         })
         self.total_frames += n
         self._write_info(cols)
@@ -161,7 +164,7 @@ class DatasetWriter:
             "next.done": {"dtype": "bool", "shape": [1], "names": None},
         })
         info = {
-            "codebase_version": "v2.1", "robot_type": "g1_29dof_dex3_sonic",
+            "codebase_version": "v2.1", "robot_type": "g1_29dof_dex3_sonic", "sonic_version": self.sonic_version,
             "total_episodes": len(self.episodes), "total_frames": self.total_frames, "total_tasks": 1,
             "total_videos": len(self.episodes), "total_chunks": 1, "chunks_size": 1000, "fps": RECORD_FPS,
             "splits": {"train": f"0:{len(self.episodes)}"},

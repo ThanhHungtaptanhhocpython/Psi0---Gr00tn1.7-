@@ -2,9 +2,9 @@
 
 Bộ công cụ để huấn luyện [Ψ₀ (Psi0)](https://github.com/physical-superintelligence-lab/Psi0) cho task
 **box pick-and-place** trên robot Unitree G1 (Dex3). Robot gắp hộp trên bệ, đứng dậy, đi tới bàn, đặt hộp vào khay rồi
-về tư thế ban đầu. Toàn thân được điều khiển qua SONIC 1.0 (`gear_sonic_deploy/policy/release`).
+về tư thế ban đầu. Toàn thân được điều khiển qua SONIC 1.1 (`gear_sonic_deploy/policy/sonic_v1_1`, chọn bằng biến `SONIC_VARIANT`; đặt `SONIC_VARIANT=release` để chạy 1.0).
 
-Repo gồm:
+Repo gồm:  
 
 1. **Sinh dữ liệu** bằng expert có kịch bản trong MuJoCo + SONIC. Chỉ giữ episode sạch.
 2. **Export sang LeRobot** đúng layout Ψ₀ neckless: action 78 = token SONIC 64 + tay 14, state 43.
@@ -13,7 +13,7 @@ Repo gồm:
 
 Có hai task:
 
-- **`box_pnp`**: gắp hộp trên bệ, chạy với SONIC 1.0. Có dataset 140 episode và model đã finetune.
+- **`box_pnp`**: gắp hộp trên bệ. Code mặc định dùng SONIC 1.1; dataset 140 episode và model đã finetune hiện có được sinh bằng SONIC 1.0 (cần sinh lại).
 - **`can_pnp`** (mới): ngồi xổm nhặt lon trên sàn cạnh chân phải, đứng dậy, đi tới bàn, đặt lon vào khay. Task này **bắt buộc
   dùng SONIC 1.1**, vì SONIC 1.0 không với tới được vật nằm ở độ cao sàn. Xem
   [scripts/datagen/can_pnp/README.md](scripts/datagen/can_pnp/README.md).
@@ -116,8 +116,8 @@ Checkpoint finetune khoảng 8000 bước trên 126 episode train: **1/10** cả
   trước khi kiểm tra lại, nên khi hai nơi khác nhau thì tin theo code.
 - **Grasp assist:** khi tay phải khép ≥ 30%, có tiếp xúc và hộp nằm trong lòng bàn tay, một weld mềm giữ hộp. Mô hình
   Dex3 tự nó không giữ nổi hộp. Cơ chế này được dùng cả khi sinh dữ liệu lẫn khi đánh giá.
-- **Phiên bản SONIC:** dùng SONIC 1.0 (`release`). Các script trong `real/SONIC` của Psi0 mặc định dùng bản 1.1, nên
-  khi deploy lên robot thật phải chuyển sang `release`.
+- **Phiên bản SONIC:** mặc định SONIC 1.1 (`sonic_v1_1`), khớp với các script trong `real/SONIC` của Psi0. `meta/info.json`
+  ghi `sonic_version`; dữ liệu, checkpoint finetune và decoder khi deploy/đánh giá phải cùng một phiên bản.
 - `colab_gr00t_*.ipynb` là các notebook cũ dùng cho GR00T, giữ lại để tham khảo.
 
 Code của Psi0 gốc theo license của repo đó.

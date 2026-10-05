@@ -49,6 +49,16 @@ SONIC_DIR = POLICY_ROOT / SONIC_VARIANT
 PLANNER = REPO_ROOT / "third_party/GR00T-WholeBodyControl/gear_sonic_deploy/planner/target_vel/V2/planner_sonic.onnx"
 
 
+def check_sonic_dir():
+    """Fail early with a useful message (sonic_v1_1 is often a symlink to a checkpoint dir elsewhere)."""
+    missing = [f for f in ("model_encoder.onnx", "model_decoder.onnx", "observation_config.yaml")
+               if not (SONIC_DIR / f).is_file()]
+    if missing:
+        raise SystemExit(f"SONIC policy '{SONIC_VARIANT}' not usable at {SONIC_DIR} (missing {missing}). "
+                         f"Download it: cd third_party/GR00T-WholeBodyControl && "
+                         f"python download_from_hf.py --sonic-v1-1, or fix the symlink.")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", required=True)
@@ -67,6 +77,7 @@ def main():
                     help="override an episode.Config field (python literal), e.g. --set feet_slip_tol=0.05")
     args = ap.parse_args()
 
+    check_sonic_dir()
     policy = SonicPolicy(SONIC_DIR, threads=args.threads)
     planner = KinematicPlanner(PLANNER, threads=args.threads)
     writer = DatasetWriter(args.out, SONIC_DIR, PLANNER)

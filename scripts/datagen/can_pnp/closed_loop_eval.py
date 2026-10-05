@@ -15,7 +15,7 @@ action chunk from the ego image + 43-D state every --exec-steps frames:
 Everything the policy sees or drives matches the data generation (generate.py / episode.py):
 the scene from sample_params(seed), the same settle before control starts, the 640x480
 head_camera image downscaled to the 320x240 the dataset was exported at, the 43-D state in the
-0810 joint order (export_psi0.py), the SONIC 1.0 decoder at 50 Hz with the token latched at
+0810 joint order (export_psi0.py), the SONIC decoder (SONIC_VARIANT, default 1.1) at 50 Hz with the token latched at
 30 Hz, PD hand targets, and the same grasp assist: a weld engages once the right hand is >= 30 %
 closed with a finger/thumb on the can in the pinch pocket, and drops when it opens below 30 %.
 The simulation pauses while a chunk is requested, so network latency does not change the result.

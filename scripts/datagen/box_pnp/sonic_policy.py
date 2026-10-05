@@ -1,4 +1,4 @@
-"""Pure-Python SONIC (GEAR-SONIC release) inference for G1 in MuJoCo.
+"""Pure-Python SONIC inference for G1 in MuJoCo: GEAR-SONIC release (1.0) and sonic_v1_1.
 
 Re-implements the observation/action path of the C++ deploy program
 (third_party/GR00T-WholeBodyControl/gear_sonic_deploy/src/g1/g1_deploy_onnx_ref)
@@ -16,6 +16,13 @@ Source references (GR00T-WholeBodyControl):
   g1_deploy_onnx_ref.cpp:1467-1647          his_* decoder history (oldest -> newest)
   g1_deploy_onnx_ref.cpp:3152-3159          action -> joint target
   policy/release/observation_config.yaml    encoder / decoder obs layout
+
+SONIC v1.1 (policy/sonic_v1_1, HF nvidia/GEAR-SONIC) differs only in the g1-mode encoder input: no root-z terms
+(1751-D instead of 1762-D) and motion_anchor_orientation_heading_10frame_step5, i.e. the reference root rotation
+relative to the robot's HEADING (yaw only) instead of its full base orientation (upstream
+g1_deploy_onnx_ref.cpp GatherMotionAnchorOrientationMutiFrame, orientation_mode 1). Its tested deployment also
+raises the ankle-pitch PD gains x1.5 (deploy.sh --motor-kp-scale 4,10=1.5 --motor-kd-scale 4,10=1.5); the
+action scale is unchanged (apply_motor_gain_scales runs after the action -> target mapping).
 """
 
 from __future__ import annotations
@@ -66,6 +73,9 @@ HAND_OPEN = np.zeros(7)
 
 # Encoder obs layout (policy/release/observation_config.yaml, total 1762)
 ENC_DIM, ENC_MODE, ENC_JPOS, ENC_JVEL, ENC_ANCHOR = 1762, 0, 4, 294, 601
+# sonic_v1_1: no motion_root_z_position(_10frame_step5) -> the heading anchor follows the joint velocities
+ENC_DIM_V11, ENC_ANCHOR_V11 = 1751, 584
+ANKLE_PITCH_MJ = [4, 10]
 DEC_DIM, HIST = 994, 10
 N_FUTURE, FUTURE_STEP = 10, 5  # frames t, t+5, ..., t+45 of the 50 Hz reference
 
@@ -123,9 +133,23 @@ class ReferenceFrame:
 
 
 # --------------------------------------------------------------------------- policy
+def sonic_version(policy_dir: str | Path) -> str:
+    """'1.1' if the policy's observation config uses the heading-normalized anchor, else '1.0'."""
+    cfg = (Path(policy_dir) / "observation_config.yaml").read_text()
+    return "1.1" if "motion_anchor_orientation_heading_10frame_step5" in cfg else "1.0"
+
+
 class SonicPolicy:
     def __init__(self, policy_dir: str | Path, threads: int = 4):
         policy_dir = Path(policy_dir)
+        self.version = sonic_version(policy_dir)
+        v11 = self.version == "1.1"
+        self.enc_dim = ENC_DIM_V11 if v11 else ENC_DIM
+        self.enc_anchor = ENC_ANCHOR_V11 if v11 else ENC_ANCHOR
+        self.kp, self.kd = KP_MJ.copy(), KD_MJ.copy()
+        if v11:   # tested v1.1 deployment tuning (ankle pitch x1.5)
+            self.kp[ANKLE_PITCH_MJ] *= 1.5
+            self.kd[ANKLE_PITCH_MJ] *= 1.5
         so = ort.SessionOptions()
         so.intra_op_num_threads = threads
         prov = ["CPUExecutionProvider"]
@@ -149,16 +173,19 @@ class SonicPolicy:
         """Token for reference frame index t (future frames clamped to the last one)."""
         if self.heading_delta is None:
             self.align_heading(robot_quat, ref[0].root_quat)
-        obs = np.zeros(ENC_DIM, dtype=np.float32)  # g1 mode: encoder_mode_4 = [0,0,0,0]
+        obs = np.zeros(self.enc_dim, dtype=np.float32)  # g1 mode: encoder_mode_4 = [0,0,0,0]
         last = len(ref) - 1
-        conj_base = quat_conj(robot_quat)
+        # 1.0: relative to the full base orientation; 1.1: relative to the robot heading (yaw only)
+        left = quat_from_yaw(yaw_of(robot_quat)) if self.version == "1.1" else robot_quat
+        conj_base = quat_conj(left)
+        anchor = self.enc_anchor
         for k in range(N_FUTURE):
             f = ref[min(t + k * FUTURE_STEP, last)]
             obs[ENC_JPOS + 29 * k: ENC_JPOS + 29 * (k + 1)] = f.joint_pos
             obs[ENC_JVEL + 29 * k: ENC_JVEL + 29 * (k + 1)] = f.joint_vel
             rel = quat_mul(conj_base, quat_mul(self.heading_delta, f.root_quat))
             R = quat_to_mat(rel)
-            obs[ENC_ANCHOR + 6 * k: ENC_ANCHOR + 6 * (k + 1)] = R[:, :2].reshape(-1)
+            obs[anchor + 6 * k: anchor + 6 * (k + 1)] = R[:, :2].reshape(-1)
         return self.enc.run(None, {"obs_dict": obs[None]})[0][0].astype(np.float32)
 
     # ---- decoder -----------------------------------------------------------------

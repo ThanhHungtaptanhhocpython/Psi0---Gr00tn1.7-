@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import os
 import sys
 import time
 from pathlib import Path
@@ -39,8 +40,21 @@ from scene import REPO_ROOT, sample_params  # noqa: E402
 from sonic_policy import SonicPolicy  # noqa: E402
 from writer import DatasetWriter  # noqa: E402
 
-SONIC_DIR = REPO_ROOT / "third_party/GR00T-WholeBodyControl/gear_sonic_deploy/policy/release"
+POLICY_ROOT = REPO_ROOT / "third_party/GR00T-WholeBodyControl/gear_sonic_deploy/policy"
+# SONIC controller: "sonic_v1_1" (default) or "release" (1.0). The env var lets closed_loop_eval.py pick it too.
+SONIC_VARIANT = os.environ.get("SONIC_VARIANT", "sonic_v1_1")
+SONIC_DIR = POLICY_ROOT / SONIC_VARIANT
 PLANNER = REPO_ROOT / "third_party/GR00T-WholeBodyControl/gear_sonic_deploy/planner/target_vel/V2/planner_sonic.onnx"
+
+
+def check_sonic_dir():
+    """Fail early with a useful message (sonic_v1_1 is often a symlink to a checkpoint dir elsewhere)."""
+    missing = [f for f in ("model_encoder.onnx", "model_decoder.onnx", "observation_config.yaml")
+               if not (SONIC_DIR / f).is_file()]
+    if missing:
+        raise SystemExit(f"SONIC policy '{SONIC_VARIANT}' not usable at {SONIC_DIR} (missing {missing}). "
+                         f"Download it: cd third_party/GR00T-WholeBodyControl && "
+                         f"python download_from_hf.py --sonic-v1-1, or fix the symlink.")
 
 
 def main():
@@ -61,7 +75,9 @@ def main():
                     help="override an episode.Config field (python literal), e.g. --set feet_slip_tol=0.05")
     args = ap.parse_args()
 
+    check_sonic_dir()
     policy = SonicPolicy(SONIC_DIR, threads=args.threads)
+    print(f"SONIC {policy.version} ({SONIC_DIR})")
     planner = KinematicPlanner(PLANNER, threads=args.threads)
     writer = DatasetWriter(args.out, SONIC_DIR, PLANNER)
     overrides = {k: ast.literal_eval(v) for k, v in (s.split("=", 1) for s in args.set)}
