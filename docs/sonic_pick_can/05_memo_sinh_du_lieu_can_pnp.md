@@ -1,112 +1,172 @@
 # Memo: sinh dữ liệu `can_pnp` (SONIC 1.1)
 
-Ngày 2026-10-04
+Cập nhật 2026-10-06
 
 ## Tóm tắt
 
-Code đã chạy được với SONIC 1.1, nhưng **chưa nên sinh dữ liệu hàng loạt**. Pilot 50 seed chỉ giữ được 5 episode,
-và trong các lần thử, gần như episode nào cũng có lon cọ vào gối hoặc đùi robot.
+Nhiệm vụ đã đổi: **lon đứng trên bục cao 20 cm**, robot **ngồi xổm** và **ôm lon bằng cả bàn tay** (trước đây lon
+đặt dưới sàn và tay kẹp miệng lon bằng 2 ngón). Pilot mới nhất trên 50 seed mới đạt **21/50 (42%)**.
 
-- Tỉ lệ thấp không phải vấn đề lớn: sinh 140 episode mất khoảng 1–1,5 giờ máy.
-- Vấn đề chính là chất lượng: dạy AI bằng dữ liệu này thì AI sẽ học cả kiểu cọ lon vào chân.
-- Đã thử 7 phương án. Phương án **D** giảm thời gian lon chạm chân khoảng 88% và lon không còn chạm khi đứng dậy.
-  Lon vẫn còn chạm gối lúc robot vừa nâng người lên.
-- Giá trị mặc định trong code chưa đổi. Các phương án chỉ được thử qua tham số.
+- So với thiết kế cũ (lon dưới sàn: 4/50), tỉ lệ đạt cao gấp khoảng 5 lần.
+- **Lỗi lon chạm gối/đùi lúc nhấc đã hết** (0/50, trước đó 8/50). Nguyên nhân là bước nhấc dịch cả hông; nay chỉ tay cử động.
+- **Không còn ca nào bị loại vì chân trượt khi với tay** (thiết kế cũ: 30/50 ca).
+- Lỗi lớn nhất còn lại: gắp hụt (17/50 tay dừng thiếu, 8/50 khép tay không bắt được lon).
+- Code thiết kế mới **chưa commit** (đang nằm trên nhánh `can-pnp-datagen-sonic11`).
 
-## Pilot 50 seed: 5 thành công
+## Các quyết định
 
-Pilot chạy 50 seed mới (500000–500049), chỉ mô phỏng vật lý, 5 tiến trình, mất 3,6 phút.
-36/45 ca hỏng xảy ra lúc robot ngồi xổm với tay xuống sàn.
+| Ngày | Quyết định |
+| --- | --- |
+| 2026-10-05 | Lon đổ nằm trong khay vẫn tính là đạt. Chỉ cần lon nằm trong khay, không rơi ra ngoài. |
+| 2026-10-05 | Khi ngồi xuống, hai tay giữ nguyên tư thế ban đầu. Tay chỉ cử động sau khi thân đã hạ xong. |
+| 2026-10-05 | Gắp bằng cả bàn tay (3 ngón ôm thân lon), không kẹp bằng đầu ngón. |
+| 2026-10-05 | Lon đặt trên bục cao 20 cm, robot ngồi xổm. Không dùng tư thế quỳ một gối. |
+| 2026-10-05 | Dừng đợt sinh dữ liệu theo thiết kế cũ. 32 episode đã sinh (`.data/can_gen_s*`) không dùng nữa. |
 
-| Lý do bị loại | Số ca | Ghi chú |
+## Vì sao phải đặt lon lên bục
+
+Đã thử cho robot **quỳ một gối** (planner SONIC mode 6) để hạ thấp người:
+
+- Quỳ được và đứng dậy lại được, gối phải chạm sàn. Hông chỉ thấp hơn ngồi xổm 4–5 cm (0,48 m so với 0,52 m).
+- Độ cao mục tiêu 0,30–0,40 m cho cùng một tư thế; 0,45 m thì robot đi lung tung khoảng 50 cm; không đặt độ cao thì
+  robot ngã. Quỳ hai gối (mode 5) cũng ngã.
+
+Dù quỳ hay ngồi xổm, **tay không xuống đủ thấp để ôm thân lon dưới sàn**. Điểm thấp nhất tay đạt được tại chỗ lon
+là khoảng 13 cm; ôm thân lon cần 7–10 cm. Nguyên nhân: SONIC chỉ hạ hông tới 0,48–0,52 m, thân trên cúi có giới hạn,
+cổ tay chỉ bẻ được ±46° (bộ giải IK giới hạn ở ±0,8 rad vì SONIC không bám được góc lớn hơn).
+
+Với lon trên bục, độ cao điểm gắp mà tay ôm được (tính hình học, chưa chạy vật lý):
+
+| Tư thế | Hông cao | Tay ôm lon được khi điểm gắp cao từ |
 | --- | --- | --- |
-| Chân trượt quá 6 cm | 23 | Phần lớn chỉ vượt nhẹ, khoảng 6,7 cm |
-| Cả người dịch quá 4 cm | 7 | Dịch 4,2–4,7 cm |
-| Chân đá vào lon trước khi gắp | 5 | |
-| Hỏng sau khi đứng dậy | 7 | Lon rơi khỏi khay (3), mất thăng bằng (2), va bàn (2) |
-| Gắp trượt | 2 | |
-| Nhấc chân trước khi đi | 1 | |
+| Đứng thẳng | 0,77 m | trên 45 cm |
+| Khuỵu nửa chừng | 0,65 m | 30 cm |
+| Ngồi xổm | 0,53 m | 20–25 cm |
 
-Ngoài chuyện chạm chân, khi bàn đỡ lon thì lon còn nghiêng khoảng 22° (median, đo trên các ca đi được tới bước đặt).
-Ngưỡng chân trượt được giữ nguyên để dữ liệu sạch.
+## Thiết kế hiện tại
 
-## Vì sao lon chạm chân
+- **Bục:** 12 × 12 cm, cao 0,19–0,21 m. Lon đặt ở (0,27; −0,30) m, dao động ±1,5 cm.
+  - Vị trí này để chân cách bục và lon ít nhất 4,5 cm suốt lúc ngồi xổm.
+  - Ở vị trí thử đầu tiên, (0,25; −0,21) m, gối và ống chân phải va vào bục ở 5/6 seed.
+- **Ngồi xổm:** giữ như cũ. Hai tay khoá ở tư thế ban đầu cho tới khi ngồi xong.
+- **Hướng bàn tay khi gắp:** lòng bàn tay quay về phía trước bên trái, các ngón chĩa sang phải 60° và nghiêng xuống 25°.
+  Lon nằm trong lòng tay, cách cổ tay 11,5 cm theo hướng ngón và 4,5 cm theo hướng lòng bàn tay.
+- **Cách tay tiếp cận lon:**
+  1. Đưa tay tới điểm chờ, cách lon 8 cm về phía lòng bàn tay và cao hơn 3 cm. Chỉnh tối đa 12 lần, tới khi lệch dưới 3 cm.
+  2. Đẩy tay vào lon qua 4 nấc.
+  3. Chỉnh thêm tối đa 3 lần. Mỗi lần được đẩy vào thêm tối đa 2 cm, nhưng chỉ khi tay chưa chạm lon.
+- **Ngón cái khi tiếp cận:** bẻ ra sau (khớp `thumb_1` = 0,5 rad) để không chặn lon; khi khép tay mới quay về ôm lon.
+- **Nhấc lon:** nhấc lên 9 cm và đưa ra xa gối 8 cm. **Hông giữ nguyên** (độ cao và trọng tâm), chỉ cánh tay cử động.
+- **Thả lon:** mở tay rồi rút tay ra theo hướng ngược với lòng bàn tay, hơi chếch lên.
 
-- Khi robot ngồi xổm, lon nằm ngay trước **đầu gối phải**: lệch sang phải khoảng 21 cm, đúng vị trí đầu gối.
-- Code cũ nhấc lon thẳng lên và kéo lùi 7 cm về phía người, nên lon va vào gối.
-- Khi đứng dậy, lon được giữ ở vị trí lệch phải 22 cm, chỉ cách đùi 1–2 cm. Tay robot hơi xệ vào trong nên lon cọ đùi.
-- Trong 11 seed qua được bước gắp, cả 11 seed đều có lon chạm chân. Tổng thời gian chạm khoảng 22 s
-  (1087 nhịp × 20 ms).
+## Pilot mới nhất: 21/50
 
-## Các phương án đã thử
+Seed 900000–900049 (chưa dùng ở lần thử nào trước đó), chỉ mô phỏng vật lý.
 
-Thử trên cùng 11 seed (những seed qua được bước gắp trong pilot). Mẫu nhỏ nên chênh 1 ca thành công chưa có ý nghĩa.
+| Lý do bị loại | Pha | Số ca | Ghi chú |
+| --- | --- | --- | --- |
+| Gắp hụt sau khi đẩy tay vào | REACH | 17 | Tay dừng thiếu 3–7 cm, hoặc lon bị xô lệch 8–17 cm |
+| Khép tay nhưng ngón không bắt được lon | GRASP | 8 | Lon đã nằm đúng lòng bàn tay (lệch < 2 cm) |
+| Không tới được điểm chờ | REACH | 2 | |
+| Cả người dịch quá 4 cm | REACH | 1 | |
+| Va mạnh vào bàn | WALK | 1 | |
 
-| Phương án | Thay đổi | Thành công | Số ca chạm chân | Thời gian chạm | Ghi chú |
-| --- | --- | --- | --- | --- | --- |
-| Gốc | Nhấc lên, kéo lùi 7 cm | 5/11 | 11/11 | 21,7 s | |
-| A | Đưa lon ra ngoài 5 cm, không kéo lùi | 5/11 | 7/11 | 3,1 s | Còn chạm khi đứng dậy |
-| B | Đưa ra ngoài 8 cm | 1/11 | 1/11 | 0,1 s | Robot ngã 4 lần |
-| C | Ra ngoài 5 cm, vẫn kéo lùi 3 cm | 5/11 | 10/11 | 6,9 s | Kéo lùi là sai hướng |
-| **D** | **A + giữ lon xa đùi thêm 5 cm khi đứng** | **4/11** | **5/11** | **2,6 s** | **Hết chạm khi đứng dậy** |
-| E | D, nhưng đưa ra xa hơn (6 cm, thêm 5 cm khi nâng người) | 2/11 | 2/11 | 0,2 s | Robot ngã 3 lần |
-| F | D + nâng tay cao hơn khi nâng người | 4/11 | 6/11 | 4,7 s | Chạm gối nhiều hơn |
-| G | F + nhấc lon cao hơn ngay từ đầu | 4/11 | 5/11 | 3,7 s | Không tốt hơn D |
+Hai lỗi đã sửa trong lần này:
 
-Kết luận:
+| Lỗi | Nguyên nhân | Cách sửa | Kết quả |
+| --- | --- | --- | --- |
+| Lon chạm gối/đùi lúc nhấc | Bộ giải IK của bước nhấc dời hông ra trước 5–12 cm, hạ xuống 4–8 cm. SONIC bám theo nên tay kéo lon lùi về phía người, đè lên gối | Khoá độ cao hông và giữ trọng tâm trên hai bàn chân khi nhấc (`lift_hold_pelvis`) | 8/50 → 0/50 |
+| Ngón cái chặn lon | Tay mở thẳng thì ngón cái thò ra phía lòng bàn tay, lon chạm ngón cái khi còn cách lòng bàn tay 4,5–7 cm (11/17 ca gắp hụt) | Bẻ ngón cái ra sau khi tiếp cận (`power_preshape`) | 18/50 → 21/50 |
 
-- Đưa lon ra ngoài là đúng hướng. Đưa xa quá (B, E) thì robot mất thăng bằng.
-- D tốt nhất: chỗ chạm còn lại chỉ ở pha nâng người khỏi tư thế ngồi xổm, chủ yếu ở 2 seed.
-- Giữ lon xa đùi (D, F) có thể gây thêm ca va bàn. Gặp 1–2 ca, cần theo dõi.
+So sánh trên cùng 50 seed: chỉ sửa bước nhấc 18/50; sửa cả hai 21/50.
 
-## Cập nhật 2026-10-05: D làm mặc định + luật loại khi lon chạm thân
+Số liệu chính:
 
-Từ 2026-10-05, D là cấu hình mặc định. Thêm luật mới: lon đang cầm mà chạm bất kỳ chỗ nào trên người robot
-(trừ bàn tay) thì loại episode (`held_can_touched_body`).
-Pilot 50 seed mới (600000–600049): **4/50 thành công, cả 4 không có lần nào lon chạm thân**.
+- Episode thành công dài khoảng 1450–1590 khung hình (khoảng 50 s).
+- Ước tính: 140 episode cần khoảng 330 seed, tức khoảng 35–40 phút với 5 tiến trình, chưa tính render.
+- Trong pilot trước (20%), 8/10 episode đạt có lon đứng thẳng trong khay; pilot mới chưa đo lại chỉ số này.
 
-- 12 seed qua được bước gắp: 4 thành công, 4 bị loại vì lon chạm gối (3 ca lúc nâng người, 1 ca lúc nhấc lon).
-- 30 ca vẫn hỏng vì chân trượt lúc với tay xuống sàn (giống trước).
-- Lon vẫn nghiêng khi đặt: median 26°.
-- Ước tính: 140 episode cần khoảng 1750 seed, tức khoảng 1,5 giờ với 6 tiến trình, chưa tính render.
+## Các phương án gắp đã thử
+
+Phần lớn phương án thử trên 6–18 seed. Kết quả phụ thuộc nhiều vào seed: cùng một phương án có thể đạt 6/18 trên nhóm
+seed này nhưng 0/12 trên nhóm khác. Bảng dưới chỉ để biết hướng nào không nên thử lại.
+
+| Thay đổi | Kết quả | Kết luận |
+| --- | --- | --- |
+| Hướng tay −75° (tay ở sau lon) | Điểm chờ nằm cạnh gối phải, tay lệch tới 7 cm | Bỏ |
+| Hướng tay −15° / −45° (tay ở bên phải lon) | Vươn tay xa, chân trượt 6–8 cm | Bỏ |
+| **Hướng tay −60°** | 3/6 seed chạy trọn vẹn ở lần thử đầu | **Giữ** |
+| Bẻ ngón cái ra sau khi tiếp cận (lúc bước nhấc còn lỗi) | Không tốt hơn trên 18 seed | Thử lại sau, xem dòng cuối bảng |
+| Đưa tay lên cao 10 cm trước khi tới điểm chờ | Chân trượt 6–10 cm | Bỏ |
+| Đẩy tay vào có đo và chỉnh liên tục | Xô lon khỏi bục (6/18) | Bỏ |
+| Đẩy tay vào theo vị trí thật của lon trong tay | Khoảng 6/30 | Giữ làm tuỳ chọn `slide_mode="pocket"` |
+| Nhấc lon chếch về trước 4 cm | Chân trượt (6/18) | Bỏ |
+| Ngồi xổm nông hơn (hông 0,58 m) | Chân trượt nhiều hơn (6/12) | Bỏ |
+| Dời bục ra trước 3 cm | Lon chạm người nhiều hơn (5/12) | Bỏ |
+| Dời điểm giữ lon ra phía đầu ngón 1,5 cm | Lon bị hất xa hơn (16–66 cm) | Bỏ |
+| **Khoá hông khi nhấc lon** | 7/8 seed từng bị lon chạm gối chạy trọn vẹn | **Giữ** |
+| **Bẻ ngón cái ra sau khi tiếp cận** (cùng với khoá hông) | 21/50 so với 18/50 | **Giữ** |
 
 ## Việc tiếp theo
 
-- [x] Chốt D làm cấu hình mặc định trong `episode.py`.
-- [x] Thêm luật loại episode khi lon chạm thân robot.
-- [ ] Xử lý chỗ lon còn chạm gối lúc nâng người. Hướng thử: đưa lon ra ngoài trước rồi mới nâng người.
-- [x] Lon nghiêng khi đặt: **chấp nhận** (quyết định 2026-10-05). Chỉ yêu cầu lon nằm trong khay, không rơi
-      ra ngoài; lon đổ nằm trong khay vẫn tính là đạt. Đã thử đặt lon tựa vào thành khay để lon không đổ, nhưng
-      lon nghiêng về phía robot nên lật qua thành và rơi khỏi bàn. Đã bỏ cách này.
-- [ ] Commit code trước khi sinh dữ liệu thật.
+- [ ] Xem lại video thiết kế mới, xác nhận chuyển động ổn (`.data/xem_video/moi_om_lon_tren_buc_*.mp4`).
+- [x] Sửa lỗi lon chạm đùi/gối lúc nhấc (8/50 → 0/50).
+- [x] Sửa lỗi ngón cái chặn lon.
+- [ ] Giảm lỗi gắp hụt còn lại (17/50) và lỗi khép tay không bắt được lon (8/50).
+- [ ] Commit code thiết kế mới.
+- [ ] Sinh 140 episode (khoảng 330 seed, tối đa 6 tiến trình).
 - [ ] Trước khi finetune: `export_psi0.py` cần thêm 2 chiều cổ để dùng được checkpoint Ψ₀ cho SONIC 1.1.
 
 ## Ghi chú kỹ thuật
 
-**Tham số mới trong `scripts/datagen/can_pnp/episode.py`** (mặc định theo cấu hình D):
+**Cảnh** (`scripts/datagen/can_pnp/scene.py`):
 
-- `lift_out` = 0,05: khi nhấc lon, đưa lon ra phía ngoài bên phải (m).
-- `raise_out` = 0,03: khi nâng người, đưa lon ra ngoài thêm (m).
-- `reject_held_can_body_contact` = True: loại episode khi lon đang cầm chạm thân robot.
+- `PEDESTAL_HEIGHT = 0.20`: đặt bằng 0 để quay về lon dưới sàn.
+- `PEDESTAL_CAN_XY = (0.27, -0.30)`: vị trí danh định của lon trên bục.
 
-**Quay lại cấu hình cũ** (trước D):
+**Tham số trong `Config`** (`scripts/datagen/can_pnp/episode.py`):
 
-```bash
---set lift_out=0.0 --set lift_pullback=0.07 --set raise_out=0.0 --set "carry_box_pos=(0.18,-0.22,0.67)" \
---set reject_held_can_body_contact=False
-```
+| Tham số | Mặc định | Ý nghĩa |
+| --- | --- | --- |
+| `grasp_style` | `"power"` | `"power"`: ôm cả bàn tay; `"pinch"`: kẹp miệng lon (thiết kế cũ) |
+| `lock_arms_crouch` | True | Khoá hai tay ở tư thế ban đầu khi ngồi xổm |
+| `power_heading_deg` / `power_tilt_deg` | −60 / 25 | Hướng các ngón và độ nghiêng bàn tay khi gắp |
+| `power_below_rim` | 0,05 m | Tâm lòng bàn tay nằm dưới miệng lon bao nhiêu |
+| `power_offset_x` | 0,115 m | Vị trí lon trong lòng tay theo hướng ngón |
+| `pregrasp_side` / `pregrasp_up` | 0,08 / 0,03 m | Điểm chờ: cách lon về phía lòng bàn tay / cao hơn |
+| `slide_mode` | `"open"` | Cách đẩy tay vào lon |
+| `power_preshape` | `thumb_1` = 0,5 | Dạng tay khi tiếp cận: ngón cái bẻ ra sau |
+| `lift_out` | 0,08 m | Khi nhấc, đưa lon ra xa gối |
+| `lift_hold_pelvis` | True | Khi nhấc, giữ độ cao hông và trọng tâm, chỉ tay cử động |
+| `reject_held_can_body_contact` | True | Loại episode khi lon đang cầm chạm thân robot |
+
+Ngoài ra, robot chạm vào bục (trừ bàn tay) cũng bị loại episode (`robot_pedestal_collision`).
 
 **Lệnh chạy pilot** (dry-run, 10 seed mỗi tiến trình):
 
 ```bash
 SONIC_VARIANT=sonic_v1_1 .venv-datagen/bin/python scripts/datagen/can_pnp/generate.py \
-    --out .data/can_pilot50/p0 --dry-run --num-episodes 10 --max-attempts 10 --seed-start 500000 --threads 3
+    --out .data/can_ped_pilot50/p0 --dry-run --num-episodes 10 --max-attempts 10 --seed-start 800000 --threads 3
 ```
 
-**Giới hạn RAM:** mỗi tiến trình mô phỏng tốn khoảng 2,2 GB. Trên máy 31 GB, **chạy tối đa 6 tiến trình cùng lúc**.
+**Giới hạn RAM:** mỗi tiến trình tốn khoảng 2,2–2,8 GB. Trên máy 31 GB, **chạy tối đa 6 tiến trình cùng lúc**.
 Chạy 12 tiến trình đã làm máy hết RAM và hệ thống phải tắt các tab Chrome.
 
 **Dữ liệu:**
 
-- Kết quả pilot: `.data/can_pilot50/` (`p0`–`p4`, log ở `logs/`).
-- Script đo lon chạm chân và kết quả các phương án nằm trong thư mục tạm của phiên làm việc, chưa đưa vào repo.
+- Pilot thiết kế mới (trước khi sửa 2 lỗi): `.data/can_ped_pilot50/`. Pilot mới nhất chạy bằng script thử nghiệm,
+  không ghi vào `.data/`.
+- Video xem nhanh: `.data/xem_video/`.
+- Các script thử nghiệm (đo tầm với, khoảng cách chân–bục, vị trí lon trong tay) nằm trong thư mục tạm của phiên làm
+  việc, chưa đưa vào repo.
+
+## Lịch sử: lon đặt dưới sàn (thiết kế cũ, 2026-10-04 → 2026-10-05)
+
+- Pilot đầu tiên: 5/50. Phần lớn hỏng vì chân trượt lúc với tay xuống sàn (30/45 ca hỏng).
+- Gần như mọi episode có lon cọ vào gối hoặc đùi phải: lúc ngồi xổm, lon nằm ngay trước gối phải, và code cũ nhấc
+  lon thẳng lên rồi kéo lùi về phía người.
+- Đã sửa bằng cách đưa lon ra phía ngoài khi nhấc và giữ lon xa đùi hơn khi đứng dậy. Thời gian lon chạm chân giảm
+  khoảng 88%. Thêm luật loại episode khi lon chạm thân. Pilot sau đó: 4/50, không còn lon chạm thân.
+- Lon nghiêng khoảng 25° khi đặt và 13/14 lần đổ nằm trong khay. Đã thử đặt lon tựa vào thành khay nhưng lon lật qua
+  thành và rơi khỏi bàn, nên đã bỏ cách này.
+- Đã commit trên nhánh `can-pnp-datagen-sonic11` (`3cde088`, `72c4f4b`).

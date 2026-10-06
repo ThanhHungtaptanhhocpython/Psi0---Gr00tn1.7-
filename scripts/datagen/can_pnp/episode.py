@@ -41,7 +41,7 @@ from dataclasses import dataclass, field
 import mujoco
 import numpy as np
 
-from kinematics import GRASP_OFFSET, IKTargets, WholeBodyIK, rot_z
+from kinematics import GRASP_OFFSET, POWER_OFFSET, IKTargets, WholeBodyIK, rot_z
 from planner import MODE_IDLE, MODE_SLOW_WALK, MODE_SQUAT, KinematicPlanner, context_from_reference, splice
 from reference import REF_DT, ReferenceBuffer
 from scene import CTRL_DT, IMG_H, IMG_W, RECORD_FPS, SIM_DT, Idx, SceneParams, build_model
@@ -95,6 +95,35 @@ def _jsonable(x):
 @dataclass
 class Config:
     token_rate_hz: float = 30.0          # decoder sees a token latched at this rate (deploy parity)
+    grasp_style: str = "power"           # "power": the whole hand wraps the can body from the side (can on the
+                                         # pedestal); "pinch": thumb + fingertips on the rim from above (floor can)
+    power_below_rim: float = 0.05        # power: hand (pocket) centre this far below the can rim
+    power_heading_deg: float = -60.0     # power: finger direction, relative to the stance heading: fingers forward-
+                                         # right, the palm facing forward-left onto the can (6 seeds: -60 -> 3 whole
+                                         # episodes; -75 put the pre-grasp spot by the right knee, the IK could not
+                                         # follow; -15/-45 reached out to the right and the feet slid)
+    power_tilt_deg: float = 25.0         # power: fingers pitched down in the palm plane (the arm reaches down;
+                                         # SONIC tracks wrist pitch only to ~+-0.8 rad)
+    pregrasp_side: float = 0.08          # power: pre-grasp, the hand this far out from the can on the palm side ...
+    pregrasp_up: float = 0.03            # ... and this much higher, then it closes in sideways
+    pregrasp_high: float = 0.0           # power: the arm first swings this much above the pre-grasp spot (0.10:
+                                         # meant to keep the swing off the can, but the feet slid 6-10 cm)
+    power_preshape: tuple = (0.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0)   # power: hand pose while reaching, thumb_1
+                                         # swung back out of the can's way: 21/50 vs 18/50 whole episodes (opened
+                                         # straight, the thumb stopped the can 4-7 cm short of the palm)
+    pregrasp_tol: float = 0.03           # power: grasp point error at the pre-grasp spot before sliding in ...
+    pregrasp_gain: float = 0.6           # ... servo gain there (0.7 overshot back and forth by 3-5 cm) ...
+    pregrasp_iters: int = 12             # ... at most this many corrections (8 stopped 6/12 seeds at 2.7-4 cm)
+    pregrasp_hold: float = 0.4           # ... and the wait after each correction (SONIC settles slowly in the squat)
+    slide_mode: str = "open"             # power slide-in: "open" (4 fixed steps along the palm normal, then <= 3
+                                         # corrections, the last ones may push in 2 cm while the hand is off the
+                                         # can): 8/30 whole episodes; "pocket" (steered by the can's position in
+                                         # the hand): ~6/30
+    power_offset_x: float = 0.115        # power: pocket position along the fingers (wrist frame x)
+    slide_iters: int = 10                # power: slide-in steps at most ...
+    slide_step: float = 0.025            # ... advancing towards the can by at most this per step ...
+    slide_depth_tol: float = 0.01        # ... until the can is within this of the pocket depth
+    lock_arms_crouch: bool = True        # CROUCH: both arms stay in the HOME pose until the squat has settled
     reach_comp: tuple = (0.0, 0.0, -0.02)  # initial aim offset (SONIC tracks the arm slightly short)
     squat_half_height: float = 0.60      # CROUCH stage 1: planner squat target pelvis height (m) ...
     squat_height: float = 0.42           # ... stage 2, the full squat (SONIC settles ~8-10 cm higher)
@@ -136,11 +165,13 @@ class Config:
     grasp_squeeze: float = 0.15          # rad, finger command past the measured angle once the box is held
                                          # (0 = keep closing to RIGHT_HAND_CLOSED)
     lift_height: float = 0.09            # LIFT: raise the grasp point 8-10 cm ...
-    lift_pullback: float = 0.0           # ... and pull it towards the robot (0.07 dragged the can into the right
-                                         # knee in 11/11 episodes) ...
-    lift_out: float = 0.05               # ... and this far out to the right (the crouched right knee sits right
-                                         # above the can; 0.08 cleared it but the robot fell in 4/11)
+    lift_pullback: float = 0.0           # ... and pull it towards the robot (floor can: 0.07 dragged it into the
+                                         # right knee in 11/11 episodes; pedestal can: -0.04, forward, slid the feet) ...
+    lift_out: float = 0.08               # ... and this far out to the right, away from the right knee (floor can:
+                                         # 0.05, 0.08 cleared the knee but the robot fell in 4/11; pedestal can:
+                                         # 0.05 left 0.5-3 cm to the knee)
     lift_from_reference: bool = True    # offset applied to the reference hand (keeps the tracking compensation)
+    lift_hold_pelvis: bool = True        # LIFT IK keeps the pelvis height and the CoM over the feet (arm-only lift)
     raise_torso: float = 0.10            # RAISE_TORSO (after LIFT): pelvis this much higher ...
     raise_hand: float = 0.14             # ... and the held box this much higher, so TURN_BACK swings the box
                                          # over the knees (still crouched it hit the legs in 8/8 episodes)
@@ -256,6 +287,11 @@ class Episode:
         self.d = mujoco.MjData(self.m)
         self.ix = Idx(self.m)
         self.ik = WholeBodyIK(self.m, self.ix)
+        self.power = self.cfg.grasp_style == "power"
+        if self.power:
+            self.ik.offset = POWER_OFFSET.copy()
+            self.ik.offset[0] = self.cfg.power_offset_x
+        self.grasp_below_rim = self.cfg.power_below_rim if self.power else GRASP_BELOW_RIM
         self.rng = np.random.default_rng(params.seed + 7)
         self.ref = ReferenceBuffer(self.ix.body_qadr)
         self.tick = 0
@@ -334,7 +370,8 @@ class Episode:
         d, ix = self.d, self.ix
         out = {"thumb_box": False, "finger_box": False, "hand_box": False, "box_floor": False,
                "box_table": False, "box_tray": False, "feet": [False, False],
-               "robot_table_force": 0.0, "hand_floor_force": 0.0, "leg_box": False, "box_body": False}
+               "robot_table_force": 0.0, "hand_floor_force": 0.0, "leg_box": False, "box_body": False,
+               "robot_pedestal": False}
         furniture = ix.table_geoms | ix.tray_geoms
         f6 = np.zeros(6)
         for i in range(d.ncon):
@@ -348,9 +385,13 @@ class Episode:
                 elif o in ix.robot_geoms:
                     out["box_body"] = True   # can on the robot anywhere but the hand
                     if o in ix.leg_geoms: out["leg_box"] = True
-                if o == ix.floor_geom: out["box_floor"] = True
+                if o == ix.floor_geom or o == ix.pedestal_geom: out["box_floor"] = True   # its start support
                 if o in ix.table_geoms: out["box_table"] = True
                 if o in ix.tray_geoms: out["box_tray"] = True
+            if ix.pedestal_geom in g:
+                o = g[1] if g[0] == ix.pedestal_geom else g[0]
+                if o in ix.robot_geoms and o not in ix.rhand_geoms:
+                    out["robot_pedestal"] = True
             if ix.floor_geom in g:
                 o = g[1] if g[0] == ix.floor_geom else g[0]
                 b = self.m.geom_bodyid[o]
@@ -375,7 +416,7 @@ class Episode:
 
     def grasp_point(self):
         p, R = self.wrist_pose()
-        return p + R @ GRASP_OFFSET
+        return p + R @ self.ik.offset
 
     def _grasp_slip(self) -> float:
         """Box drift (m) relative to the wrist since the grasp assist engaged."""
@@ -498,6 +539,8 @@ class Episode:
                 raise EpisodeFailed("leg_can_collision")
         if PH[self.phase] <= PH["STABILIZE_UPRIGHT"]:   # right hand/forearm vs the tabletop while picking
             self._pstat("hand_table_clear", "min", self._geoms_dist(self.ix.rhand_coll_geoms, self.ix.table_top_geom), "min")
+        if c["robot_pedestal"]:   # a knee / shin / forearm on the pedestal (the hand may brush it)
+            raise EpisodeFailed("robot_pedestal_collision")
         # table collision
         self.max_table_force = max(self.max_table_force, c["robot_table_force"])
         if c["robot_table_force"] > 0:
@@ -837,12 +880,24 @@ class Episode:
             yaw = yaw_of(d.qpos[3:7])
             lift_ref = self.to_ref(self.grasp_point() + rot_z(yaw) @ np.array([-cfg.lift_pullback, -cfg.lift_out,
                                                                                cfg.lift_height]))
-        q_l, _ = self.ik.solve(self._seed_q(), IKTargets(feet=self.ref_feet(), com_xy=None, hand_pos=lift_ref,
-                                                       hand_R=self._hold_R(), posture=nom, posture_w=pw, w_feet=100,
-                                                       w_com=10, w_hand_rot=cfg.w_hold_rot, pelvis_yaw=pelvis_yaw))
+        q0 = self._seed_q()
+        # lift_hold_pelvis: the pelvis stays (height + CoM over the feet) and only the arm lifts. Free, the IK moved the
+        # reference pelvis 5-12 cm forward and 4-8 cm down; SONIC followed and the held can swung back and in onto the
+        # right knee / thigh (pedestal can: 8/50 episodes)
+        hold = cfg.lift_hold_pelvis
+        q_l, _ = self.ik.solve(q0, IKTargets(feet=self.ref_feet(), com_xy=self._support_center() if hold else None,
+                                             hand_pos=lift_ref, hand_R=self._hold_R(), posture=nom, posture_w=pw,
+                                             w_feet=100, w_com=10, w_hand_rot=cfg.w_hold_rot, pelvis_yaw=pelvis_yaw,
+                                             pelvis_z=float(q0[2]) if hold else None, w_pelvis=20))
         self.ref.add_segment(q_l, 0.9)
         while self.tick < len(self.ref):
             self._step_tick()
+            if self.box_pose()[0][2] - p.rest_z > 0.03:
+                self._event("object_lifted")
+        for _ in range(int(1.0 / CTRL_DT)):   # an arm-only lift (pelvis held) can take a little longer
+            if "object_lifted" in self.events:
+                break
+            self.ref.add_hold(CTRL_DT); self._step_tick()
             if self.box_pose()[0][2] - p.rest_z > 0.03:
                 self._event("object_lifted")
         if "object_lifted" not in self.events:
@@ -955,8 +1010,10 @@ class Episode:
         self.R_place_ref = self.ik.fk(q_now).xmat[ix.rpalm].reshape(3, 3).copy()
         self.q_wrist_grasp = q_now[ix.body_qadr[27:29]].copy()
         wR = self.wrist_pose()[1]
-        out_dir = -wR[:, 0]
-        if out_dir[2] < 0.7:
+        out_dir = -wR[:, 1] if self.power else -wR[:, 0]   # power: away from the palm side; pinch: up the fingers
+        if self.power:
+            out_dir = out_dir + np.array([0, 0, 0.3 - out_dir[2]])
+        elif out_dir[2] < 0.7:
             out_dir = out_dir + np.array([0, 0, 0.7 - out_dir[2]])
         out_dir /= np.linalg.norm(out_dir)
         q_r = self._place_ik(self.grasp_point() + cfg.retract_dist * out_dir, self.R_place_ref, self._seed_q(), iters=200)
@@ -1004,7 +1061,16 @@ class Episode:
         """Grasp point (pocket centered 3 cm below the can rim) and wrist orientation (the can's body yaw: the
         can is round, its yaw only selects the grasp heading)."""
         bp, bq = self.box_pose()
-        return bp + np.array([0, 0, self.p.box_half[2] - GRASP_BELOW_RIM]), rot_z(yaw_of(bq)) @ R_GRASP
+        point = bp + np.array([0, 0, self.p.box_half[2] - self.grasp_below_rim])
+        if not self.power:
+            return point, rot_z(yaw_of(bq)) @ R_GRASP
+        # power: wrist z (the finger curl axis) along the can, fingers at power_heading from the stance heading,
+        # pitched down by power_tilt within the palm plane; the palm side (+y) faces the can
+        yaw = self._feet_frame(self.feet_now())[1] + np.radians(self.cfg.power_heading_deg)
+        x = np.array([np.cos(yaw), np.sin(yaw), 0.0]); z = np.array([0, 0, 1.0])
+        R = np.column_stack([x, np.cross(z, x), z])
+        t = np.radians(self.cfg.power_tilt_deg)
+        return point, R @ np.array([[np.cos(t), 0, np.sin(t)], [0, 1, 0], [-np.sin(t), 0, np.cos(t)]])
 
     def _reach_ik(self, q0, hand_ref, R_ref):
         """REACH IK (reference-frame targets), turned-squat posture prior, pelvis heading held."""
@@ -1014,7 +1080,83 @@ class Episode:
                                            w_hand_rot=self.cfg.reach_hand_rot_w, pelvis_yaw=c["pelvis_yaw"], pelvis_z=c["pelvis_z"],
                                            w_pelvis=self.cfg.reach_pelvis_w))[0]
 
+    def _reach_power(self, target, R_hand, q_from, diag_key="reach"):
+        """Side approach for the whole-hand grasp. Aiming straight at the can, the position servo overshot by
+        5-9 cm sideways and swept it off the pedestal, so: (1) servo the grasp point to a pre-grasp spot
+        pregrasp_side behind the can (palm side) and pregrasp_up higher, clear of it; (2) slide in along the palm
+        normal in a few steps, keeping the tracking compensation found in (1); (3) at most two small corrections
+        across the palm normal (height / along the fingers), never pushing further into the can."""
+        cfg = self.cfg
+        reach_ik = lambda q0, tgt: self._reach_ik(q0, self.to_ref(tgt), self.Rref(R_hand))
+        n = R_hand[:, 1] / np.linalg.norm(R_hand[:, 1])          # palm normal, towards the can
+        pre = target - cfg.pregrasp_side * n + np.array([0, 0, cfg.pregrasp_up])
+        log = self._reach_dbg = []
+        self.hand_target = np.asarray(cfg.power_preshape, dtype=float)
+        q_k = reach_ik(q_from, pre + np.array([0, 0, cfg.pregrasp_high]))
+        self.ref.add_segment(q_k, cfg.pregrasp_time); self.run_until_ref_end()
+        q_k = reach_ik(q_k, pre)
+        self.ref.add_segment(q_k, 0.8); self.run_until_ref_end()
+        aim = pre + np.array(cfg.reach_comp)
+        for it in range(cfg.pregrasp_iters):
+            q_k = reach_ik(q_k, aim)
+            self.ref.add_segment(q_k, 0.8 if it == 0 else 0.5); self.ref.add_hold(cfg.pregrasp_hold)
+            self.run_until_ref_end()
+            err = pre - self.grasp_point()
+            ik_res = float(np.linalg.norm(self.ik.grasp_point(self.ik.fk(q_k)) - self.to_ref(aim)))
+            log.append((it, aim.round(3).tolist(), err.round(3).tolist(), float(self.d.qpos[2]), round(ik_res, 3)))
+            if np.linalg.norm(err) < cfg.pregrasp_tol:
+                break
+            aim = pre + np.clip(aim + cfg.pregrasp_gain * err - pre, -cfg.reach_aim_clip, cfg.reach_aim_clip)
+        else:
+            self.diag[diag_key] = {"errs": [np.round(e[2], 3).tolist() for e in log], "ik_res": [e[4] for e in log],
+                                   "aims": [e[1] for e in log]}
+            raise EpisodeFailed(f"pregrasp_failed(err={np.linalg.norm(err):.3f})")
+        # slide in, steered by where the can actually is in the hand (pocket error, wrist frame: x along the fingers,
+        # y the palm normal towards the can, z the curl axis), so a nudged can is followed, not aimed past.
+        # Across the palm the error is corrected with the servo gain; towards the can the hand only advances, by
+        # at most slide_step, and not at all once the can is at the pocket depth or touches the palm. Aiming at a
+        # fixed target instead stopped 4-7 cm short (open loop) or shoved the can off the pedestal (closed loop).
+        if cfg.slide_mode == "open":
+            comp = aim - pre
+            for k in range(1, 5):
+                q_k = reach_ik(q_k, pre + (target - pre) * k / 4 + comp)
+                self.ref.add_segment(q_k, 0.4); self.ref.add_hold(0.15); self.run_until_ref_end()
+            self.ref.add_hold(0.2); self.run_until_ref_end()
+            for it in range(3):
+                e = target - self.grasp_point()
+                e_n = float(e @ n)
+                log.append(("side", comp.round(3).tolist(), e.round(3).tolist(), float(self.d.qpos[2]), 0.0))
+                push = 0.0 if self.last_contacts["hand_box"] else float(np.clip(cfg.reach_gain * e_n, 0.0, 0.02))
+                if np.linalg.norm(e - e_n * n) < 0.015 and push < 0.005:
+                    break
+                comp = comp + cfg.reach_gain * (e - e_n * n) + push * n
+                q_k = reach_ik(q_k, target + comp)
+                self.ref.add_segment(q_k, 0.4); self.ref.add_hold(0.2); self.run_until_ref_end()
+        for it in range(cfg.slide_iters if cfg.slide_mode == "pocket" else 0):
+            P = self._pocket_err()
+            log.append(("slide", aim.round(3).tolist(), P.round(3).tolist(), float(self.d.qpos[2]), 0.0))
+            touching = bool(self.last_contacts["hand_box"])
+            adv = 0.0 if (touching or P[1] < cfg.slide_depth_tol) else float(np.clip(P[1], 0.0, cfg.slide_step))
+            if adv == 0.0 and np.hypot(P[0], P[2]) < 0.012:
+                break
+            wR = self.wrist_pose()[1]
+            aim = aim + wR @ np.array([cfg.reach_gain * P[0], adv, cfg.reach_gain * P[2]])
+            q_k = reach_ik(q_k, aim)
+            self.ref.add_segment(q_k, 0.4); self.ref.add_hold(0.2); self.run_until_ref_end()
+        err = target - self.grasp_point()
+        self.reach_log += log
+        self.diag[diag_key] = {"iters": len(log), "err": float(np.linalg.norm(err)),
+                               "errs": [np.round(e[2], 3).tolist() for e in log], "ik_res": [e[4] for e in log],
+                               "can_shift": float(np.linalg.norm(self.box_pose()[0][:2] - np.asarray(self.p.box_xy))),
+                               "contacts": {k: bool(self.last_contacts[k]) for k in ("thumb_box", "finger_box", "hand_box")},
+                               "pocket_err_wrist": self._pocket_err().round(3).tolist()}
+        if not self._box_in_pocket(cfg.reach_tol):
+            raise EpisodeFailed(f"{diag_key}_failed(err={np.linalg.norm(err):.3f})")
+        return q_k
+
     def _reach(self, target, R_hand, q_from, diag_key="reach"):
+        if self.power:
+            return self._reach_power(target, R_hand, q_from, diag_key)
         """Pre-grasp above the box (slow swing), then down onto `target` (grasp point, world) with a bounded
         position servo. The aim may not be integrated down into the box: with a fingertip on the box top the
         unbounded servo drove the reference hand several cm into box + pedestal, so the feet slid and the
@@ -1022,7 +1164,11 @@ class Episode:
         cfg, d, ix = self.cfg, self.d, self.ix
         reach_ik = lambda q0, tgt: self._reach_ik(q0, self.to_ref(tgt), self.Rref(R_hand))
         log = self._reach_dbg = []   # kept on the episode: readable after a failed reach too
-        q_k = reach_ik(q_from, target + np.array([0, 0, cfg.pregrasp_height]))
+        if self.power:   # beside the can on the palm side, a little higher; then in sideways
+            pre = target - cfg.pregrasp_side * R_hand[:, 1] + np.array([0, 0, cfg.pregrasp_up])
+        else:
+            pre = target + np.array([0, 0, cfg.pregrasp_height])
+        q_k = reach_ik(q_from, pre)
         self.ref.add_segment(q_k, cfg.pregrasp_time); self.run_until_ref_end()
         base = target + np.array(cfg.reach_comp)
         aim = base.copy()
@@ -1071,9 +1217,10 @@ class Episode:
         cfg, ix = self.cfg, self.ix
         n = int(cfg.grasp_close_time / CTRL_DT)
         touched = False
+        start = np.asarray(cfg.power_preshape, dtype=float) if self.power else HAND_OPEN
         for k in range(n + int(0.3 / CTRL_DT)):
             s = min(1.0, (k + 1) / n)
-            self.hand_target = s * frac * RIGHT_HAND_CLOSED
+            self.hand_target = start + s * (frac * RIGHT_HAND_CLOSED - start)
             if self.grasped and cfg.grasp_squeeze > 0:
                 # once the grasp assist holds the box, each finger closes only up to grasp_squeeze past its
                 # measured angle: squeezing on to "fully closed" (1.4 N.m per joint on a 0.15 kg box)
@@ -1155,12 +1302,19 @@ class Episode:
             f.append(self.last_contacts["hand_floor_force"])
         return float(np.mean(f))
 
+    def _pocket_err(self) -> np.ndarray:
+        """Can grasp-height axis point minus the hand pocket, in the wrist frame."""
+        wp, wR = self.wrist_pose()
+        bp, bq = self.box_pose()
+        top_pt = bp + quat_rotate(bq, np.array([0, 0, self.p.box_half[2] - self.grasp_below_rim]))
+        return wR.T @ (top_pt - wp) - self.ik.offset
+
     def _box_in_pocket(self, tol: float = 0.03) -> bool:
         """Box grasp region (3 cm below its top) within `tol` of the hand's pinch pocket."""
         wp, wR = self.wrist_pose()
         bp, bq = self.box_pose()
-        top_pt = bp + quat_rotate(bq, np.array([0, 0, self.p.box_half[2] - GRASP_BELOW_RIM]))
-        return bool(np.linalg.norm(wR.T @ (top_pt - wp) - GRASP_OFFSET) < tol)
+        top_pt = bp + quat_rotate(bq, np.array([0, 0, self.p.box_half[2] - self.grasp_below_rim]))
+        return bool(np.linalg.norm(wR.T @ (top_pt - wp) - self.ik.offset) < tol)
 
     def hand_R_for_upright_box(self, yaw: float) -> np.ndarray:
         """Wrist orientation that holds the (welded) box upright with the given yaw (legacy option)."""
@@ -1211,6 +1365,8 @@ class Episode:
             out = self.pl.plan(ctx, MODE_SQUAT, direction=(0, 0, 0), target_heading=yaw, height=height,
                                seed=int(self.p.seed))
             J, P, Q = splice(out, ctx)
+            if self.cfg.lock_arms_crouch:   # the planner swings the arms forward to balance: keep them at HOME
+                J = [np.r_[j[:15], DEFAULT_ANGLES_MJ[15:29]] for j in J]
             self.ref.add_raw(J, P, Q)
             self.run_ticks(15)
             zs = [pp[2] for pp in self.ref.root_pos[-10:]]

@@ -19,6 +19,11 @@ from scene import Idx
 # fingers, +y towards the thumb). Found empirically: the palm occupies x<0.106, the
 # thumb/fingers pinch region is around here.
 GRASP_OFFSET = np.array([0.135, 0.05, 0.0])
+# Power (whole-hand) grasp: where the axis of a 5.3 cm can sits when the hand wraps it, the can axis along the
+# wrist z (the fingers curl about z). Found by sweeping the can through the hand model: the palm touches it,
+# index/middle reach it at ~25-43 % closure, the thumb at ~70-80 %. x 0.125 rather than 0.115: 1 cm more room
+# for the (opened, see Config.power_preshape) thumb while the can slides in.
+POWER_OFFSET = np.array([0.125, 0.045, 0.0])
 
 
 def rot_err(R_cur: np.ndarray, R_tgt: np.ndarray) -> np.ndarray:
@@ -58,6 +63,7 @@ class WholeBodyIK:
     def __init__(self, m: mujoco.MjModel, ix: Idx):
         self.m, self.ix = m, ix
         self.d = mujoco.MjData(m)
+        self.offset = GRASP_OFFSET.copy()          # grasp point in the right_wrist_yaw_link frame
         self.dofs = np.r_[np.arange(6), ix.body_vadr]           # optimized dofs
         self.n = len(self.dofs)
         lo = m.jnt_range[[m.dof_jntid[v] for v in ix.body_vadr], 0]
@@ -84,7 +90,7 @@ class WholeBodyIK:
     def grasp_point(self, d=None):
         d = d or self.d
         w = d.body(self.ix.rpalm)
-        return w.xpos + w.xmat.reshape(3, 3) @ GRASP_OFFSET
+        return w.xpos + w.xmat.reshape(3, 3) @ self.offset
 
     def com(self, d=None):
         d = d or self.d

@@ -41,6 +41,9 @@ class SceneParams:
                                                   # knee in the squat, outside the right foot's walking lane
     box_yaw: float = -1.2                # grasp heading (the can is round: this only sets the wrist yaw it is
                                          # grasped with, see Episode._grasp_target)
+    pedestal_height: float = 0.0         # 0: the can stands on the floor; > 0: on a static pedestal this high
+    pedestal_half: tuple[float, float] = (0.06, 0.06)   # 12 x 12 cm top
+    pedestal_offset: tuple[float, float] = (0.02, -0.02)  # pedestal center - can center: away from the legs
     # table: ~2 natural SONIC steps (~0.23 m of pelvis travel) + a placement standoff
     table_edge_x: float = 0.38          # near edge of the tabletop
     table_y: float = 0.09               # shifted left so its near-RIGHT corner (the tray) is in reach of
@@ -76,8 +79,8 @@ class SceneParams:
 
     @property
     def rest_z(self):
-        """Can center z when standing on the floor."""
-        return self.can_half_height
+        """Can center z when standing on its start support (floor or pedestal)."""
+        return self.pedestal_height + self.can_half_height
 
     @property
     def tray_xy(self):
@@ -101,6 +104,10 @@ class SceneParams:
         return d
 
 
+PEDESTAL_HEIGHT = 0.20   # the can stands on a pedestal this high (0: on the floor, the original can_pnp layout)
+PEDESTAL_CAN_XY = (0.27, -0.30)   # nominal can position on the pedestal (+-1.5 cm)
+
+
 def sample_params(seed: int, level: int = 0) -> SceneParams:
     """Small, controlled randomization. level 0 = baseline ranges from the task spec."""
     r = np.random.default_rng(seed)
@@ -111,7 +118,10 @@ def sample_params(seed: int, level: int = 0) -> SceneParams:
         can_radius=0.0265,
         can_half_height=u(0.064, 0.070),  # 12.8-14 cm tall
         box_mass=u(0.13, 0.17),
-        box_xy=(0.20 + u(-0.02, 0.02) * s, -0.25 + u(-0.02, 0.02) * s),   # small jitter beside the right foot
+        # small jitter beside the right foot; on the pedestal further out to the right: the squatting legs pass
+        # it with >= 4.5 cm to spare and the right hand still wraps the can from behind (palm forward)
+        box_xy=((PEDESTAL_CAN_XY[0] + u(-0.015, 0.015) * s, PEDESTAL_CAN_XY[1] + u(-0.015, 0.015) * s) if PEDESTAL_HEIGHT > 0 else
+                (0.20 + u(-0.02, 0.02) * s, -0.25 + u(-0.02, 0.02) * s)),
         box_yaw=-1.2 + u(-0.1, 0.1) * s,
         # 2 SONIC steps move the pelvis ~0.15 m; the table edge then sits ~0.28 m ahead of it
         table_edge_x=u(0.62, 0.66),      # can_pnp: further than box_pnp (0.43-0.46): reaching down to the floor
@@ -135,6 +145,7 @@ def sample_params(seed: int, level: int = 0) -> SceneParams:
         # drawn last so the draws above stay the same per seed
         tray_yaw=u(-0.14, 0.14),         # +-8 deg
         tray_rgb=tuple(np.clip(np.array([0.20, 0.55, 0.35]) + r.uniform(-0.05, 0.05, 3), 0, 1).tolist()),
+        pedestal_height=(PEDESTAL_HEIGHT + u(-0.01, 0.01) * s) if PEDESTAL_HEIGHT > 0 else 0.0,
     )
 
 
@@ -158,8 +169,15 @@ def build_model(p: SceneParams) -> mujoco.MjModel:
         if site.name == "com_marker":
             site.rgba = [0, 0, 0, 0]
 
-    # can standing on the floor (free body)
-    box = wb.add_body(name="box", pos=[p.box_xy[0], p.box_xy[1], p.can_half_height + 1e-3],
+    # optional low pedestal (static) the can stands on
+    if p.pedestal_height > 0:
+        ped = wb.add_body(name="pedestal", pos=[p.box_xy[0] + p.pedestal_offset[0], p.box_xy[1] + p.pedestal_offset[1], 0.0])
+        ped.add_geom(name="pedestal_geom", type=mujoco.mjtGeom.mjGEOM_BOX,
+                     size=[p.pedestal_half[0], p.pedestal_half[1], p.pedestal_height / 2],
+                     pos=[0, 0, p.pedestal_height / 2], rgba=[0.35, 0.36, 0.40, 1.0], friction=[1.0, 0.01, 0.001])
+
+    # can standing on the floor / pedestal (free body)
+    box = wb.add_body(name="box", pos=[p.box_xy[0], p.box_xy[1], p.rest_z + 1e-3],
                       quat=[np.cos(p.box_yaw / 2), 0, 0, np.sin(p.box_yaw / 2)])
     box.add_freejoint(name="box_free")
     box.add_geom(name="box_geom", type=mujoco.mjtGeom.mjGEOM_CYLINDER, size=[p.can_radius, p.can_half_height, 0],
@@ -253,6 +271,7 @@ class Idx:
         self.box_vadr = m.joint("box_free").dofadr[0]
         self.box_geom = m.geom("box_geom").id
         self.floor_geom = m.geom("floor").id
+        self.pedestal_geom = m.geom("pedestal_geom").id if mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, "pedestal_geom") >= 0 else -1
         self.table_geoms = {m.geom(i).id for i in range(m.ngeom) if m.geom(i).name.startswith("table")}
         self.tray_geoms = {m.geom(i).id for i in range(m.ngeom) if m.geom(i).name.startswith("tray")}
         self.tray_body = m.body("tray").id
