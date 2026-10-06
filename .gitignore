@@ -1,0 +1,17 @@
+# videos (generated datasets, review clips)
+*.mp4
+*.webm
+*.avi
+*.mov
+*.mkv
+
+# generated data, logs, experiments
+.data/
+
+# python
+__pycache__/
+*.pyc
+.venv*/
+
+# upstream checkouts (GR00T-WholeBodyControl etc.)
+third_party/

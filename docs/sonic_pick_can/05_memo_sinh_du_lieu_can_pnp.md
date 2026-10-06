@@ -11,7 +11,8 @@ Nhiệm vụ đã đổi: **lon đứng trên bục cao 20 cm**, robot **ngồi 
 - **Lỗi lon chạm gối/đùi lúc nhấc đã hết** (0/50, trước đó 8/50). Nguyên nhân là bước nhấc dịch cả hông; nay chỉ tay cử động.
 - **Không còn ca nào bị loại vì chân trượt khi với tay** (thiết kế cũ: 30/50 ca).
 - Lỗi lớn nhất còn lại: gắp hụt (17/50 tay dừng thiếu, 8/50 khép tay không bắt được lon).
-- Code thiết kế mới **chưa commit** (đang nằm trên nhánh `can-pnp-datagen-sonic11`).
+- **Đã sinh xong bộ dữ liệu 144 episode**: `.data/can_ped_144` (xem mục "Bộ dữ liệu"), từ commit `463d74e` trên nhánh
+  `can-pnp-datagen-sonic11`.
 
 ## Các quyết định
 
@@ -21,7 +22,7 @@ Nhiệm vụ đã đổi: **lon đứng trên bục cao 20 cm**, robot **ngồi 
 | 2026-10-05 | Khi ngồi xuống, hai tay giữ nguyên tư thế ban đầu. Tay chỉ cử động sau khi thân đã hạ xong. |
 | 2026-10-05 | Gắp bằng cả bàn tay (3 ngón ôm thân lon), không kẹp bằng đầu ngón. |
 | 2026-10-05 | Lon đặt trên bục cao 20 cm, robot ngồi xổm. Không dùng tư thế quỳ một gối. |
-| 2026-10-05 | Dừng đợt sinh dữ liệu theo thiết kế cũ. 32 episode đã sinh (`.data/can_gen_s*`) không dùng nữa. |
+| 2026-10-05 | Dừng đợt sinh dữ liệu theo thiết kế cũ. 32 episode đã sinh (`.data/can_gen_s*`) không dùng nữa (đã xoá 2026-10-06, cùng các dữ liệu lon dưới sàn khác). |
 
 ## Vì sao phải đặt lon lên bục
 
@@ -86,6 +87,29 @@ Số liệu chính:
 - Ước tính: 140 episode cần khoảng 330 seed, tức khoảng 35–40 phút với 5 tiến trình, chưa tính render.
 - Trong pilot trước (20%), 8/10 episode đạt có lon đứng thẳng trong khay; pilot mới chưa đo lại chỉ số này.
 
+## Bộ dữ liệu `.data/can_ped_144` (2026-10-06)
+
+| Mục | Giá trị |
+| --- | --- |
+| Số episode | 144 (6 tiến trình × 24), mỗi episode một seed khác nhau |
+| Số lần thử | 394, tức tỉ lệ đạt 37% |
+| Thời gian sinh | khoảng 85 phút (20:25 → 21:55), không lần nào hết RAM |
+| Tổng khung hình | 214.297 khung hình @ 30 FPS (khoảng 119 phút) |
+| Độ dài episode | 45–56 s, trung vị 49,5 s |
+| Lon cuối episode | 131 đứng thẳng (< 15°), 13 đổ nằm trong khay |
+| Phiên bản SONIC | 1.1 |
+| Dung lượng | 3,5 GB |
+| Code | commit `463d74e`, nhánh `can-pnp-datagen-sonic11` |
+
+Kiểm tra: action 78 chiều, state 43 chiều, không có NaN; số khung hình video bằng số dòng parquet ở cả 144 episode;
+chỉ số episode liên tục 0–143.
+
+Lý do loại trong 250 lần thử hỏng: gắp hụt 147, khép tay không bắt được lon 30, nhấc hụt 18, không tới được điểm chờ 16,
+chân hoặc người dịch quá ngưỡng 19, lon chạm người lúc nhấc 7, lon rơi khỏi khay khi rút tay 7, các lỗi khác 6.
+
+Các thư mục shard `.data/can_ped_s0`–`s5` đã xoá sau khi gộp và kiểm tra (2026-10-06). Log sinh dữ liệu còn trong
+`.data/can_ped_logs/` và `meta/generation_log.jsonl` của bộ gộp.
+
 ## Các phương án gắp đã thử
 
 Phần lớn phương án thử trên 6–18 seed. Kết quả phụ thuộc nhiều vào seed: cùng một phương án có thể đạt 6/18 trên nhóm
@@ -113,8 +137,9 @@ seed này nhưng 0/12 trên nhóm khác. Bảng dưới chỉ để biết hư�
 - [x] Sửa lỗi lon chạm đùi/gối lúc nhấc (8/50 → 0/50).
 - [x] Sửa lỗi ngón cái chặn lon.
 - [ ] Giảm lỗi gắp hụt còn lại (17/50) và lỗi khép tay không bắt được lon (8/50).
-- [ ] Commit code thiết kế mới.
-- [ ] Sinh 140 episode (khoảng 330 seed, tối đa 6 tiến trình).
+- [x] Commit code thiết kế mới (`463d74e`).
+- [x] Sinh 144 episode: `.data/can_ped_144`.
+- [ ] Export sang định dạng Ψ₀ (`export_psi0.py`) và finetune.
 - [ ] Trước khi finetune: `export_psi0.py` cần thêm 2 chiều cổ để dùng được checkpoint Ψ₀ cho SONIC 1.1.
 
 ## Ghi chú kỹ thuật
