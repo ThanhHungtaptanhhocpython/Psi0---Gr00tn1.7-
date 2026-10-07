@@ -147,8 +147,10 @@ class ClosedLoopEpisode(Episode):
             t0 = time.time()
             chunk = self.policy.chunk(self.frame, image, state)
             self.latency.append(time.time() - t0)
-            if chunk.shape[1] != TOKEN + HANDS:
-                raise RuntimeError(f"expected {TOKEN + HANDS}-D actions, got {chunk.shape}")
+            # 78 = neckless layout; the SONIC 1.1 post-train layout pads it to 80 (2 neck dims, unused here)
+            if chunk.shape[1] < TOKEN + HANDS:
+                raise RuntimeError(f"expected >= {TOKEN + HANDS}-D actions, got {chunk.shape}")
+            chunk = chunk[:, :TOKEN + HANDS]
             self.queue, self.since_request = list(chunk), 0
         if self.videos:
             image, _ = self.observe()

@@ -1,6 +1,6 @@
 # Memo: sinh dữ liệu `can_pnp` (SONIC 1.1)
 
-Cập nhật 2026-10-06
+Cập nhật 2026-10-07
 
 ## Tóm tắt
 
@@ -110,6 +110,40 @@ chân hoặc người dịch quá ngưỡng 19, lon chạm người lúc nhấc 
 Các thư mục shard `.data/can_ped_s0`–`s5` đã xoá sau khi gộp và kiểm tra (2026-10-06). Log sinh dữ liệu còn trong
 `.data/can_ped_logs/` và `meta/generation_log.jsonl` của bộ gộp.
 
+## Chuẩn bị finetune Ψ₀ với SONIC 1.1 (2026-10-07)
+
+Quyết định: train tiếp từ checkpoint Ψ₀ cho SONIC 1.1 (`postpre.sonic1.1.unifolm.2609181726.40k`), không dùng `sonic-wbcbox`,
+vì `sonic-wbcbox` học token SONIC 1.0 còn dữ liệu sinh bằng SONIC 1.1.
+
+**Không cần thêm 2 chiều cổ khi export.** Đọc code Ψ₀ bản phát hành checkpoint này (commit `2830f93`) thì thấy:
+
+- Checkpoint được post-train trên dữ liệu UniFoLM G1, cũng **không có cổ**: action = token 64 + tay 14, state 43 theo
+  thứ tự khớp 0810, ảnh 320×240. Đây đúng là định dạng `export_psi0.py` đang xuất.
+- Trình nạp dữ liệu tự đệm 0 lên action 80 / state 45 (`pad-action-dim=80`, `pad-state-dim=45`). Hai chiều action đệm
+  không tính vào loss.
+- Đã đọc phần đầu file `action_header.safetensors` trên HF: action 80, state 45, 12 khối, có token null cho state, mã
+  hoá câu lệnh CLIP 768 chiều, `qk-norm`, chuỗi action dài 30. Notebook kiểm tra lại các con số này trước khi train.
+
+Những gì đã làm:
+
+| Việc | Chi tiết |
+| --- | --- |
+| Notebook mới | `scripts/datagen/can_pnp/colab_finetune_psi0_sonic11.ipynb`: code Ψ₀ `2830f93`, warm-start SONIC 1.1, tham số model theo công thức 1.1 của Ψ₀ (12 khối, `combined-temb` + CLIP, `state-as-action-token`, `state-null-token`, `qk-norm`). VLM đóng băng, chỉ train action header. |
+| Câu lệnh của task | Sửa từ "pick up the can next to your right foot" thành "pick up the can from the low stand on your right" trong `episode.py` và trong meta của `can_ped_144`. Đánh giá dùng chung câu lệnh này. |
+| Client đánh giá | `closed_loop_eval.py` nhận action ≥ 78 chiều và lấy 78 chiều đầu (model mới xuất 80). |
+| Export | `.data/psi0/can_ped_144_train` (130 episode), `can_ped_144_val` (14 episode), `can_ped_144_psi0.zip`. |
+
+Lưu ý khi train trên Colab:
+
+- Dùng GPU G4, H100 hoặc A100. Header 12 khối làm bộ nhớ và checkpoint lớn hơn bản `box_pnp` (ước tính 15–17 GB mỗi
+  checkpoint, cần Drive trống ≥ 40 GB). Smoke test (cell 8) đo con số thật.
+- `uv.lock` ở commit `2830f93` vẫn lỗi (khoá trùng). Notebook dùng lại file lock của commit `47993ee` như bản cũ; bản mới chỉ
+  thêm `decord2` và `wandb[media]`, cả hai không dùng khi train.
+- Server đánh giá cũng phải chạy code `2830f93`. Notebook server của `box_pnp` vẫn dùng `4f3720d`, chưa cập nhật.
+- Token SONIC 1.1 trong dữ liệu nằm trong [−0,75; 0,6875] (lưới 1/16); 0,7% giá trị vượt ±0,625. `closed_loop_eval.py` chỉ
+  kẹp về ±0,625 khi bật `--clip-token` (mặc định tắt). Client trên robot thật của Ψ₀ có kẹp: cần kiểm tra lại khoảng kẹp
+  cho SONIC 1.1 trước khi deploy.
+
 ## Các phương án gắp đã thử
 
 Phần lớn phương án thử trên 6–18 seed. Kết quả phụ thuộc nhiều vào seed: cùng một phương án có thể đạt 6/18 trên nhóm
@@ -139,8 +173,10 @@ seed này nhưng 0/12 trên nhóm khác. Bảng dưới chỉ để biết hư�
 - [ ] Giảm lỗi gắp hụt còn lại (17/50) và lỗi khép tay không bắt được lon (8/50).
 - [x] Commit code thiết kế mới (`463d74e`).
 - [x] Sinh 144 episode: `.data/can_ped_144`.
-- [ ] Export sang định dạng Ψ₀ (`export_psi0.py`) và finetune.
-- [ ] Trước khi finetune: `export_psi0.py` cần thêm 2 chiều cổ để dùng được checkpoint Ψ₀ cho SONIC 1.1.
+- [x] Export sang định dạng Ψ₀: `.data/psi0/can_ped_144_psi0.zip`.
+- [x] Notebook finetune SONIC 1.1: `scripts/datagen/can_pnp/colab_finetune_psi0_sonic11.ipynb`.
+- [ ] Tải zip lên `My Drive/psi0/`, chạy smoke test rồi train trên Colab.
+- [ ] Cập nhật notebook server đánh giá sang code Ψ₀ `2830f93`.
 
 ## Ghi chú kỹ thuật
 

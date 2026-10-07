@@ -1,27 +1,24 @@
-# can_pnp: ngồi xổm nhặt lon trên sàn → đứng dậy → đi tới bàn → đặt vào khay
+# can_pnp: ngồi xổm lấy lon trên bục → đứng dậy → đi tới bàn → đặt vào khay
 
-Pipeline sinh dữ liệu cho G1 (Dex3) với SONIC trong MuJoCo. Được chép từ `../box_pnp` rồi sửa lại.
+Pipeline sinh dữ liệu cho G1 (Dex3) với SONIC 1.1 trong MuJoCo. Được chép từ `../box_pnp` rồi sửa lại.
+Quá trình thiết kế, các phương án đã thử và số liệu nằm trong
+[docs/sonic_pick_can/05_memo_sinh_du_lieu_can_pnp.md](../../../docs/sonic_pick_can/05_memo_sinh_du_lieu_can_pnp.md).
 
-- Bỏ bệ đỡ. Vật cần nhặt là **lon slim cao 12,8–14 cm** (đường kính 5,3 cm), đứng trên sàn, phía trước bên phải
-  bàn chân phải, ở (0,20; −0,25) m. Vị trí được random ±2 cm.
-- Ngồi xuống theo từng nấc: ngồi nửa chừng rồi cân bằng, ngồi hẳn rồi cân bằng. Sau đó với tay phải xuống, gắp lon từ trên
-  xuống (có hỗ trợ gắp), nhấc lên, đứng dậy, cân bằng, đi tới bàn, đặt lon vào khay, rồi về tư thế ban đầu.
-- Bàn đặt xa hơn so với `box_pnp`: mép bàn ở 0,62–0,66 m. Lý do: khi với xuống sàn, thân robot chúi về trước và đập
-  vào mép bàn nếu bàn ở gần.
+- Vật cần lấy là **lon slim cao 12,8–14 cm** (đường kính 5,3 cm), đứng trên **bục 12 × 12 cm cao 0,19–0,21 m**, phía trước
+  bên phải robot, ở (0,27; −0,30) m ± 1,5 cm. Ở vị trí này chân cách bục và lon ít nhất 4,5 cm lúc ngồi xổm.
+- Robot ngồi xổm theo từng nấc. **Hai tay giữ nguyên tư thế ban đầu cho tới khi ngồi xong**, rồi tay phải mới đưa ra.
+- **Gắp bằng cả bàn tay**: lòng bàn tay áp vào thân lon từ phía sau bên phải, 3 ngón ôm quanh lon (có hỗ trợ gắp).
+  Tay tới một điểm chờ cạnh lon rồi đẩy vào; ngón cái bẻ ra sau trong lúc tiếp cận để không chặn lon.
+- Nhấc lon (hông giữ nguyên, chỉ tay cử động), đứng dậy, cân bằng, đi tới bàn, đặt lon vào khay, về tư thế ban đầu.
+- Episode bị loại nếu lon đang cầm chạm thân robot, robot chạm bục (trừ bàn tay), hoặc chân trượt quá ngưỡng.
+- Đặt `scene.PEDESTAL_HEIGHT = 0` và `--set "grasp_style='pinch'"` để quay về thiết kế cũ (lon dưới sàn, kẹp miệng lon).
 - Code bên trong vẫn giữ tên "box" của `box_pnp` (`box_pose`, body `box`, `SceneParams.box_half`, ...), nên
   `episode`/`writer`/`render` dùng chung được. Với lon, `box_half` = (bán kính, bán kính, nửa chiều cao).
 
 ## Bắt buộc dùng SONIC 1.1
 
-SONIC 1.0 (`policy/release`) **không với tới** lon đặt trên sàn. Trong sim đã đo được:
-
-| | SONIC 1.0 | SONIC 1.1 |
-|---|---|---|
-| Ngồi xổm, điểm gắp thấp nhất tay phải xuống được | 0,235 m | **0,145 m** (với vòng servo: ~0,13 m) |
-| Quỳ hai gối (planner mode 5) | 0,235 m | robot lùi ~1 m, không dùng được |
-| Điểm gắp cần đạt (2,5 cm dưới miệng lon) | 0,10–0,115 m | |
-
-SONIC 1.0 không gập eo theo lệnh (lệnh 0,5 rad, thực tế chỉ 0,02–0,05) và đặt tay cao hơn lệnh 5–13 cm.
+SONIC 1.0 (`policy/release`) không gập eo theo lệnh (lệnh 0,5 rad, thực tế chỉ 0,02–0,05) và đặt tay cao hơn lệnh
+5–13 cm, nên không hạ người và tay đủ thấp cho task này.
 
 Tải SONIC 1.1 (repo public `nvidia/GEAR-SONIC`):
 
@@ -37,37 +34,46 @@ từ `observation_config.yaml`. So với 1.0, bản 1.1 khác ở ba điểm:
 - hướng neo tính tương đối theo hướng thân robot (chỉ yaw);
 - gain PD cổ chân pitch nhân 1,5, theo cấu hình deploy đã được NVIDIA kiểm thử.
 
-Token của 1.1 vẫn nằm trên lưới 1/16, trong khoảng ±0,5. `meta/info.json` và `meta/episode_meta.jsonl` ghi lại `sonic_version`.
+Token của 1.1 vẫn nằm trên lưới 1/16. `meta/info.json` và `meta/episode_meta.jsonl` ghi lại `sonic_version`.
 
 ## Chạy
 
+Mỗi tiến trình tốn khoảng 2,2–2,8 GB RAM. Trên máy 31 GB, chạy tối đa 6 tiến trình cùng lúc.
+
 ```bash
 # 1 episode mẫu + video review
-SONIC_VARIANT=sonic_v1_1 .venv-datagen/Scripts/python scripts/datagen/can_pnp/generate.py \
-    --out .data/can_pnp_sample --num-episodes 1 --seed-start 1 --max-attempts 8 --review
+SONIC_VARIANT=sonic_v1_1 .venv-datagen/bin/python scripts/datagen/can_pnp/generate.py \
+    --out .data/can_ped_sample --num-episodes 1 --seed-start 1 --max-attempts 8 --review
 
-# chạy thật: chia shard theo dải seed rồi gộp lại
-python scripts/datagen/can_pnp/generate.py --out .data/can_pnp_s0 --num-episodes 70 --seed-start 0
-python scripts/datagen/can_pnp/generate.py --out .data/can_pnp_s1 --num-episodes 70 --seed-start 100000
-python scripts/datagen/can_pnp/merge_shards.py --out .data/can_pnp_140 .data/can_pnp_s0 .data/can_pnp_s1
+# pilot đo tỉ lệ đạt (chỉ mô phỏng vật lý, không ghi dữ liệu)
+python scripts/datagen/can_pnp/generate.py --out .data/can_ped_pilot --dry-run --num-episodes 10 --max-attempts 10 --seed-start 800000
 
-# export cho Psi0, đánh giá closed-loop (giống box_pnp)
-python scripts/datagen/can_pnp/export_psi0.py .data/can_pnp_140 --out .data/psi0 --zip
+# chạy thật: chia shard theo dải seed (dưới 1 000 000, dải trên dành cho đánh giá) rồi gộp lại
+python scripts/datagen/can_pnp/generate.py --out .data/can_ped_s0 --num-episodes 24 --seed-start 0
+python scripts/datagen/can_pnp/generate.py --out .data/can_ped_s1 --num-episodes 24 --seed-start 100000
+python scripts/datagen/can_pnp/merge_shards.py --out .data/can_ped_48 .data/can_ped_s0 .data/can_ped_s1
+
+# export cho Psi0 (train/val + zip để tải lên Drive)
+python scripts/datagen/can_pnp/export_psi0.py .data/can_ped_144 --out .data/psi0 --zip
+
+# đánh giá closed-loop với server Psi0
 python scripts/datagen/can_pnp/closed_loop_eval.py --server http://HOST:PORT --episodes 10 --out .data/eval/can
 ```
 
 `--max-attempts` mặc định bằng 20 lần `--num-episodes`.
 
-## Tình trạng và việc còn lại
+## Finetune Ψ₀ (SONIC 1.1)
 
-- **Tỉ lệ episode đạt khoảng 1/3** (2/6 seed khi thử). Gần như mọi lần bị loại đều do **bàn chân trượt hơn 6 cm** lúc với tay
-  hoặc lúc nhấc lon. Ngưỡng này được giữ chặt như `box_pnp` để dữ liệu sạch, nên chỉ cần chạy nhiều seed hơn.
-  Nếu muốn yield cao hơn, có thể nới bằng `--set feet_slip_tol_contact=0.09 --set body_shift_tol=0.06`, đổi lại dữ liệu
-  sẽ có chân trượt nhiều hơn.
-- Khi mang lon tới khay, lon nghiêng 15–40° vì giữ nguyên hướng cổ tay lúc gắp. Lon vẫn vào khay nhưng thường bị đổ
-  trong khay (`require_upright=False`).
-- **Finetune Ψ₀:** checkpoint khởi động hiện dùng trong `box_pnp/colab_finetune_psi0.ipynb` (`sonic-wbcbox`) học
-  token của **SONIC 1.0**. Với dữ liệu này cần checkpoint SONIC 1.1. HF `USC-PSI-Lab/psi-model` có
-  `psi0/postpre.sonic1.1.unifolm.2609181726.40k`, nhưng checkpoint này dùng layout có cổ (action 80 / state 45), nên phải pad
-  thêm 2 chiều cổ khi export. Khi deploy hoặc đánh giá cũng phải dùng decoder 1.1.
-- Camera đầu nhìn thấy lon ở góc dưới bên phải ngay từ tư thế ban đầu, và thấy rõ trong lúc với tay.
+Dùng [`colab_finetune_psi0_sonic11.ipynb`](colab_finetune_psi0_sonic11.ipynb), **không** dùng notebook của `box_pnp`
+(notebook đó warm-start từ `sonic-wbcbox`, checkpoint học token SONIC 1.0).
+
+- Warm-start: `psi0/postpre.sonic1.1.unifolm.2609181726.40k` (HF `USC-PSI-Lab/psi-model`), code Ψ₀ `2830f93`.
+- Không cần sửa export: dữ liệu vẫn là action 78 / state 43; trình nạp dữ liệu tự đệm 0 lên 80 / 45, đúng như lúc checkpoint
+  được post-train trên dữ liệu UniFoLM G1 (cũng không có cổ). Hai chiều đệm của action không tính vào loss.
+- Server đánh giá phải chạy code Ψ₀ `2830f93`. Model xuất action 80 chiều; `closed_loop_eval.py` lấy 78 chiều đầu.
+
+## Tình trạng
+
+- Bộ dữ liệu `.data/can_ped_144`: 144 episode, tỉ lệ đạt khi sinh 37%, 131/144 lon đứng thẳng trong khay ở cuối episode.
+- Lỗi chính còn lại khi sinh dữ liệu là gắp hụt (tay dừng thiếu vài cm hoặc khép tay không bắt được lon).
+- Camera đầu nhìn thấy lon và bục ngay từ tư thế ban đầu.

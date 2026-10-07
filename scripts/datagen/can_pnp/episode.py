@@ -55,7 +55,7 @@ PHASES = ["HOME", "CROUCH", "TURN_TORSO", "REACH", "GRASP", "SLIP", "REGRASP_REA
 PH = {p: i for i, p in enumerate(PHASES)}
 EVENTS = ["grasp_success", "object_lifted", "upright_reached", "walk_started", "table_reached",
           "object_supported", "release_success", "home_reached"]
-INSTRUCTION = ("Squat down, pick up the can next to your right foot with your right hand, stand up, walk to "
+INSTRUCTION = ("Squat down, pick up the can from the low stand on your right with your right hand, stand up, walk to "
                "the table, put the can in the tray on the table, then return to the home pose.")
 
 # fingers down, thumb towards the robot's left (+y); rotated by the box yaw at runtime
