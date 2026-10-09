@@ -1,6 +1,6 @@
 # Memo: sinh dữ liệu `can_pnp` (SONIC 1.1)
 
-Cập nhật 2026-10-07
+Cập nhật 2026-10-09
 
 ## Tóm tắt
 
@@ -13,6 +13,9 @@ Nhiệm vụ đã đổi: **lon đứng trên bục cao 20 cm**, robot **ngồi 
 - Lỗi lớn nhất còn lại: gắp hụt (17/50 tay dừng thiếu, 8/50 khép tay không bắt được lon).
 - **Đã sinh xong bộ dữ liệu 144 episode**: `.data/can_ped_144` (xem mục "Bộ dữ liệu"), từ commit `463d74e` trên nhánh
   `can-pnp-datagen-sonic11`.
+- **Sẵn sàng finetune Ψ₀ với SONIC 1.1:** dữ liệu đã export (`.data/psi0/can_ped_144_psi0.zip`) và có notebook Colab mới
+  (commit `68e9916`). Notebook chưa chạy thử trên Colab.
+- Có thể train thêm GR00T N1.7 trên cùng dữ liệu; hai cách và yêu cầu ở mục "Train với GR00T N1.7".
 
 ## Các quyết định
 
@@ -22,6 +25,8 @@ Nhiệm vụ đã đổi: **lon đứng trên bục cao 20 cm**, robot **ngồi 
 | 2026-10-05 | Khi ngồi xuống, hai tay giữ nguyên tư thế ban đầu. Tay chỉ cử động sau khi thân đã hạ xong. |
 | 2026-10-05 | Gắp bằng cả bàn tay (3 ngón ôm thân lon), không kẹp bằng đầu ngón. |
 | 2026-10-05 | Lon đặt trên bục cao 20 cm, robot ngồi xổm. Không dùng tư thế quỳ một gối. |
+| 2026-10-06 | Chuyển động của thiết kế mới đã ổn (xem video seed 900003, 900016). Sinh 144 episode với cấu hình này. |
+| 2026-10-07 | Finetune Ψ₀ từ checkpoint SONIC 1.1 (`postpre.sonic1.1.unifolm`), không dùng `sonic-wbcbox` (token SONIC 1.0). |
 | 2026-10-05 | Dừng đợt sinh dữ liệu theo thiết kế cũ. 32 episode đã sinh (`.data/can_gen_s*`) không dùng nữa (đã xoá 2026-10-06, cùng các dữ liệu lon dưới sàn khác). |
 
 ## Vì sao phải đặt lon lên bục
@@ -144,6 +149,26 @@ Lưu ý khi train trên Colab:
   kẹp về ±0,625 khi bật `--clip-token` (mặc định tắt). Client trên robot thật của Ψ₀ có kẹp: cần kiểm tra lại khoảng kẹp
   cho SONIC 1.1 trước khi deploy.
 
+## Train với GR00T N1.7 (2026-10-08, chưa làm)
+
+Dữ liệu `can_ped_144` dùng lại được cho GR00T N1.7, nhưng phải chuyển sang định dạng của GR00T. Dự án
+`~/Code/GEAR-SONIC-GR00T-N1.7` đã có notebook finetune, server GR00T và file cấu hình modality để tận dụng.
+Checkpoint gốc `nvidia/GR00T-N1.7-3B` **không có embodiment SONIC**. Tag `UNITREE_G1_SONIC` có trong code, nhưng NVIDIA
+chưa công bố checkpoint hay dữ liệu cho tag này.
+
+| | Cách 1: GR00T xuất token SONIC | Cách 2: GR00T xuất lệnh kiểu REAL_G1 |
+| --- | --- | --- |
+| Action model học | token SONIC 64 + tay 14, như dữ liệu hiện có | vị trí cổ tay, góc khớp tay, eo, độ cao hông, lệnh đi |
+| Việc với dữ liệu | Thêm `modality.json`, file cấu hình modality (`NEW_EMBODIMENT`), tính lại thống kê. Không phải tính lại số liệu. | Tính lại toàn bộ action từ dữ liệu đã ghi: FK ra vị trí cổ tay, suy ra lệnh đi và độ cao hông |
+| Tận dụng checkpoint gốc | Ít: phần action phải học từ đầu, có thể cần nhiều dữ liệu hơn | Nhiều: đúng kiểu action GR00T đã học cho G1 |
+| Lúc chạy | token → SONIC 1.1, giống Ψ₀ | cần thêm bộ chuyển "độ cao hông + lệnh đi" sang chế độ ngồi xổm/đi của SONIC |
+| Công sức | ít (khoảng 1 ngày) | nhiều hơn hẳn |
+
+Yêu cầu chung: GPU A100 (khoảng 35 GB VRAM), quyền tải model gated `nvidia/Cosmos-Reason2-2B` trên Hugging Face, và một
+client đánh giá mới (GR00T dùng ZMQ, Ψ₀ dùng HTTP).
+
+Đề xuất: train Ψ₀ trước. Nếu cần so sánh với GR00T thì làm cách 1 trước vì dùng chung dữ liệu và đường chạy với Ψ₀.
+
 ## Các phương án gắp đã thử
 
 Phần lớn phương án thử trên 6–18 seed. Kết quả phụ thuộc nhiều vào seed: cùng một phương án có thể đạt 6/18 trên nhóm
@@ -167,7 +192,7 @@ seed này nhưng 0/12 trên nhóm khác. Bảng dưới chỉ để biết hư�
 
 ## Việc tiếp theo
 
-- [ ] Xem lại video thiết kế mới, xác nhận chuyển động ổn (`.data/xem_video/moi_om_lon_tren_buc_*.mp4`).
+- [x] Xem lại video thiết kế mới, xác nhận chuyển động ổn (2026-10-06).
 - [x] Sửa lỗi lon chạm đùi/gối lúc nhấc (8/50 → 0/50).
 - [x] Sửa lỗi ngón cái chặn lon.
 - [ ] Giảm lỗi gắp hụt còn lại (17/50) và lỗi khép tay không bắt được lon (8/50).
@@ -177,6 +202,7 @@ seed này nhưng 0/12 trên nhóm khác. Bảng dưới chỉ để biết hư�
 - [x] Notebook finetune SONIC 1.1: `scripts/datagen/can_pnp/colab_finetune_psi0_sonic11.ipynb`.
 - [ ] Tải zip lên `My Drive/psi0/`, chạy smoke test rồi train trên Colab.
 - [ ] Cập nhật notebook server đánh giá sang code Ψ₀ `2830f93`.
+- [ ] (Tuỳ chọn) Chuẩn bị train GR00T N1.7, cách 1: cấu hình modality và thống kê cho `can_ped_144`, client đánh giá ZMQ.
 
 ## Ghi chú kỹ thuật
 
@@ -217,7 +243,8 @@ Chạy 12 tiến trình đã làm máy hết RAM và hệ thống phải tắt c
 
 - Pilot thiết kế mới (trước khi sửa 2 lỗi): `.data/can_ped_pilot50/`. Pilot mới nhất chạy bằng script thử nghiệm,
   không ghi vào `.data/`.
-- Video xem nhanh: `.data/xem_video/`.
+- Video xem nhanh: `.data/xem_video/` (`seed900003_*`, `seed900016_*`: góc nhìn bên ngoài và camera đầu robot).
+- Dữ liệu export cho Ψ₀: `.data/psi0/can_ped_144_train`, `can_ped_144_val`, `can_ped_144_psi0.zip` (450 MB).
 - Các script thử nghiệm (đo tầm với, khoảng cách chân–bục, vị trí lon trong tay) nằm trong thư mục tạm của phiên làm
   việc, chưa đưa vào repo.
 
