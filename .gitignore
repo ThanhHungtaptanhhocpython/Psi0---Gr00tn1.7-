@@ -15,3 +15,7 @@ __pycache__/
 
 # upstream checkouts (GR00T-WholeBodyControl etc.)
 third_party/
+
+# downloaded archives (eval results, Colab packs) and MuJoCo debug dumps
+*.zip
+MJDATA.TXT
