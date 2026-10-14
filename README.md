@@ -1,132 +1,172 @@
-# Ψ₀ + SONIC: G1 gắp vật đặt vào khay
+# Ψ₀ vs GR00T N1.7 on a Unitree G1: walk around an obstacle, squat, pick, place
 
-Bộ công cụ để huấn luyện [Ψ₀ (Psi0)](https://github.com/physical-superintelligence-lab/Psi0) cho task
-**box pick-and-place** trên robot Unitree G1 (Dex3). Robot gắp hộp trên bệ, đứng dậy, đi tới bàn, đặt hộp vào khay rồi
-về tư thế ban đầu. Toàn thân được điều khiển qua SONIC 1.1 (`gear_sonic_deploy/policy/sonic_v1_1`, chọn bằng biến `SONIC_VARIANT`; đặt `SONIC_VARIANT=release` để chạy 1.0).
+This repo compares two vision-language-action models, [Ψ₀ (Psi0)](https://github.com/physical-superintelligence-lab/Psi0)
+and [NVIDIA GR00T N1.7](https://github.com/NVIDIA/Isaac-GR00T), on a loco-manipulation task with a Unitree G1 humanoid
+(Dex3 hands) in MuJoCo:
 
-Repo gồm:  
+> Walk around the box in front of you to the low stand, squat down, pick up the can from the stand with your right hand,
+> stand up, walk to the table, put the can in the tray on the table, then return to the home pose.
 
-1. **Sinh dữ liệu** bằng expert có kịch bản trong MuJoCo + SONIC. Chỉ giữ episode sạch.
-2. **Export sang LeRobot** đúng layout Ψ₀ neckless: action 78 = token SONIC 64 + tay 14, state 43.
-3. **Finetune Ψ₀ trên Colab** (L4 hoặc G4), checkpoint lưu lên Google Drive.
-4. **Server policy trên Colab + mô phỏng MuJoCo trên máy local** để đánh giá closed-loop.
+Both models drive the whole body through NVIDIA's **SONIC 1.1** whole-body controller. They output the same action:
+a 64-D SONIC motion token for the body plus 14 hand joints. The repo contains everything around the models: a scripted
+expert that generates demonstrations, exports to both models' dataset formats, Colab notebooks for finetuning and
+serving, and a closed-loop evaluation harness.
 
-Có hai task:
+The current task is [`can_nav_pnp`](scripts/datagen/can_nav_pnp/README.md). The full design log, with every approach that
+was tried and the numbers behind each decision, is in
+[docs/sonic_pick_can/06_memo_can_nav_pnp.md](docs/sonic_pick_can/06_memo_can_nav_pnp.md) (Vietnamese).
 
-- **`box_pnp`**: gắp hộp trên bệ. Code mặc định dùng SONIC 1.1; dataset 140 episode và model đã finetune hiện có được sinh bằng SONIC 1.0 (cần sinh lại).
-- **`can_pnp`**: ngồi xổm nhặt lon trên bục thấp, đứng dậy, đi tới bàn, đặt lon vào khay. Task này **bắt buộc dùng SONIC 1.1**,
-  vì SONIC 1.0 không hạ người và tay đủ thấp. Xem [scripts/datagen/can_pnp/README.md](scripts/datagen/can_pnp/README.md).
-- **`can_nav_pnp`** (task hiện tại): đi vòng qua vật cản, rồi làm task `can_pnp`. Dữ liệu dùng cho cả **Ψ₀** và **GR00T N1.7**;
-  có notebook finetune, server và gói sinh dữ liệu trên Colab. Xem
-  [scripts/datagen/can_nav_pnp/README.md](scripts/datagen/can_nav_pnp/README.md) và
-  [docs/sonic_pick_can/06_memo_can_nav_pnp.md](docs/sonic_pick_can/06_memo_can_nav_pnp.md).
+## Status (2026-10-14)
 
-Repo chỉ chứa phần thêm vào. Nó chạy bên trong một bản checkout của Psi0 gốc, đặt đúng các thư mục sau:
+| Step | Status |
+| --- | --- |
+| `can_nav_160`: 160 episodes, obstacle in the centre, detour on the left | Done, exported for Ψ₀ and GR00T |
+| Ψ₀ finetuned on `can_nav_160` (run `cannav160-s11`, 8,000 steps) | Done |
+| GR00T N1.7 finetuned on `can_nav_160` | Not run yet (notebook ready) |
+| Closed-loop evaluation of Ψ₀ ckpt 8000 | 2 successes in the first 3 valid scenes; 10-scene run on Colab in progress |
+| 340 more episodes with a randomized obstacle (`--level 1`), generated on Colab | Generated; not merged yet |
+| Merge to 500 episodes, export, retrain both models, compare | Next |
+
+## How it works
+
+```mermaid
+flowchart LR
+    A["Scripted expert<br/>kinematic planner (walk, squat)<br/>+ IK keyframes (reach, grasp)"] --> B["SONIC 1.1<br/>encoder → motion token → decoder"]
+    B --> C["MuJoCo physics<br/>G1 + Dex3, 200 Hz"]
+    C --> D{"Quality filter<br/>per-phase checks"}
+    D -- accepted --> E["LeRobot v2.1 dataset<br/>30 FPS, action 78, state 43"]
+    D -- rejected --> F["generation_log.jsonl<br/>failure reason"]
+    E --> G["export_psi0.py"]
+    E --> H["export_gr00t.py"]
+    G --> I["Finetune + serve on Colab"]
+    H --> I
+    I --> J["Closed-loop evaluation<br/>same seeds and scenes"]
+```
+
+- **Expert.** SONIC's kinematic planner (`planner_sonic.onnx`, trained with the MotionBricks code) produces the walking
+  and squatting references. Reaching, grasping and placing use IK keyframes. SONIC tracks these references in physics,
+  so every recorded action is a real SONIC token.
+- **Filtering.** Only clean episodes are kept. Every attempt, with its rejection reason and per-phase diagnostics, goes
+  to `meta/generation_log.jsonl`. Physics runs headless; accepted episodes are rendered afterwards from their recorded
+  states, so rejected attempts cost no rendering.
+- **One dataset, two models.** Both exports use the same validation episodes, so the models are trained and validated on
+  identical data.
+
+## Main findings so far
+
+- **Re-anchor the scene to where the robot actually stops.** SONIC stops and places its feet only to within about ±5 cm,
+  while the grasp needs the can within ±1.5 cm. Once the robot has settled, the stand, can, table and tray are moved by
+  the rigid transform from the nominal to the actual stance. They are static and far from the path, so this is equivalent
+  to having placed them there from the start (verified by replaying recorded actions in the final layout).
+- **Square the feet before squatting.** After walking, SONIC stands with the toes splayed (+10° / −20°), and squatting from
+  that stance makes the feet slip. The expert now steps each foot back to the nominal stance first.
+- **Expert success rate: 1/15 → 9/18 → 14/18 (78%)** across the three pilots that introduced these changes. With the
+  randomized obstacle and `--level 1` it is 18/40 (45%), mostly from missed grasps.
+- **Always face forward.** Turning the body along the path made the right hand brush the obstacle; walking sideways while
+  facing +x keeps 7–15 cm of clearance.
+- **SONIC 1.1 cannot squat fully.** The lowest pelvis height is about 0.42–0.47 m (0.76 m standing). Commanding deeper
+  only lifts the heels. Picking an object off the floor would need SONIC itself to be finetuned, so the can sits on a
+  low stand.
+- **The detour side is inferred from the image.** The robot goes around the wider side of the obstacle, with the same
+  instruction every time. Left/right instructions and random choices without a visual cue were rejected: the model
+  could average both directions and walk into the obstacle.
+
+## A fair comparison
+
+| | Ψ₀ | GR00T N1.7 |
+| --- | --- | --- |
+| Data and validation split | same episodes | same episodes |
+| Action | `action.body_token` 64 + hands 14 | `action` 78: `motion_token` 64, `left_hand_joints` 7, `right_hand_joints` 7 |
+| State | 43 (joint order 0810) | 46 = 43 + projected gravity 3 |
+| Camera | head camera, 320×240 | head camera, 320×240 |
+| Effective batch / steps | 128 / 8,000 | 128 / 8,000 |
+| Everything else | Ψ₀ recipe defaults | GR00T `finetune.sh` defaults |
+| Evaluation | same seeds (from 1,000,000), same scenes, `--exec-steps 15` | same |
+
+Only the step count and effective batch size are matched; learning rate, augmentation and the other settings stay at
+each model's own defaults.
+
+## Repository layout
 
 ```
-scripts/datagen/box_pnp/    task hộp: code sinh dữ liệu, export, đánh giá, notebook Colab
-scripts/datagen/can_pnp/    task lon trên bục (SONIC 1.1): sinh dữ liệu, export, đánh giá
-scripts/datagen/can_nav_pnp/ đi vòng vật cản + task lon: sinh dữ liệu (local/Colab), export Ψ₀ + GR00T, notebook, đánh giá
-docs/sonic_pick_can/        ghi chú: pipeline, kế hoạch finetune/kiểm thử, báo cáo các lần chạy
+scripts/datagen/can_nav_pnp/  current task: data generation (local / Colab), Ψ₀ + GR00T export, notebooks, evaluation
+scripts/datagen/can_pnp/      earlier task: squat and pick a can off a low stand (SONIC 1.1)
+scripts/datagen/box_pnp/      first task: pick a box off a pedestal
+docs/sonic_pick_can/          design notes, pipeline, pilot reports, memos (Vietnamese)
 ```
 
-## Cài đặt (máy local Ubuntu)
+The repo only contains these additions. It runs inside a checkout of the original Psi0 repo.
+
+## Setup (Ubuntu)
 
 ```bash
 git clone https://github.com/physical-superintelligence-lab/Psi0.git
 cd Psi0
 git checkout 4f3720d45e102b36d7c3e9465ab8062274170518
 git submodule update --init third_party/GR00T-WholeBodyControl
-git -C third_party/GR00T-WholeBodyControl lfs pull     # model G1 (MJCF), ONNX của SONIC
-# chỉ cần cho can_pnp: SONIC 1.1 -> gear_sonic_deploy/policy/sonic_v1_1/
+git -C third_party/GR00T-WholeBodyControl lfs pull     # G1 model (MJCF), SONIC ONNX files
+# SONIC 1.1 -> gear_sonic_deploy/policy/sonic_v1_1/
 (cd third_party/GR00T-WholeBodyControl && python download_from_hf.py --sonic-v1-1)
 
-# chép các thư mục của repo này vào cùng vị trí
-git clone https://github.com/ndhoang2k5/psi0.git /tmp/psi0-boxpnp
-cp -r /tmp/psi0-boxpnp/scripts/datagen scripts/
-mkdir -p docs && cp -r /tmp/psi0-boxpnp/docs/sonic_pick_can docs/
+# copy this repo's folders into the same places
+git clone https://github.com/ThanhHungtaptanhhocpython/Psi0---Gr00tn1.7-.git /tmp/psi0-g1
+cp -r /tmp/psi0-g1/scripts/datagen scripts/
+mkdir -p docs && cp -r /tmp/psi0-g1/docs/sonic_pick_can docs/
 
-# môi trường cho sinh dữ liệu / đánh giá (Python 3.11), cài bằng uv (venv này không có pip)
-curl -LsSf https://astral.sh/uv/install.sh | sh     # nếu chưa có uv
+# Python 3.11 environment for data generation and evaluation (uv; the venv has no pip)
+curl -LsSf https://astral.sh/uv/install.sh | sh     # if uv is missing
 uv venv --python 3.11 .venv-datagen
-uv pip install --python .venv-datagen/bin/python mujoco==3.14.0 numpy onnxruntime imageio imageio-ffmpeg \
+uv pip install --python .venv-datagen/bin/python mujoco==3.14.0 onnxruntime==1.30.0 numpy imageio imageio-ffmpeg \
     pandas pyarrow pillow scipy matplotlib
-# chỉ cần khi đánh giá GR00T (closed_loop_eval.py --gr00t)
+# only for evaluating GR00T (closed_loop_eval.py --gr00t)
 uv pip install --python .venv-datagen/bin/python pyzmq msgpack
 ```
 
-Các lệnh bên dưới chạy trong terminal, ở thư mục gốc của repo (`cd ~/Code/PSI/psi0`). Máy không có màn hình (SSH) thì thêm
-`MUJOCO_GL=egl` (có GPU) hoặc `MUJOCO_GL=osmesa` trước lệnh, và không dùng `--viewer`.
+Run the commands from the repo root. On a machine without a display, prefix them with `MUJOCO_GL=egl` (GPU) or
+`MUJOCO_GL=osmesa` and leave out `--viewer`.
 
-## Quy trình
-
-**1. Sinh dữ liệu**
+## Quick start
 
 ```bash
-# xem trước 1 episode (video + biểu đồ để kiểm tra)
-.venv-datagen/bin/python scripts/datagen/box_pnp/generate.py --out .data/box_pnp_preview --num-episodes 1 --review
+# 1. pilot: success rate of the expert (physics only, nothing written but the attempt log)
+.venv-datagen/bin/python scripts/datagen/can_nav_pnp/generate.py --out .data/can_nav_pilot --dry-run \
+    --num-episodes 6 --max-attempts 6 --seed-start 900000 --threads 2
+.venv-datagen/bin/python scripts/datagen/can_nav_pnp/summarize_log.py .data/can_nav_pilot
 
-# chạy thật: chia shard theo dải seed, rồi gộp
-.venv-datagen/bin/python scripts/datagen/box_pnp/generate.py --out .data/box_pnp_s0 --num-episodes 70 --seed-start 0
-.venv-datagen/bin/python scripts/datagen/box_pnp/generate.py --out .data/box_pnp_s1 --num-episodes 70 --seed-start 100000
-.venv-datagen/bin/python scripts/datagen/box_pnp/merge_shards.py --out .data/box_pnp_tray_140 .data/box_pnp_s0 .data/box_pnp_s1
+# 2. generate (shard by seed range, below 1,000,000) and merge; or run_blocks.py / colab_datagen.ipynb on Colab
+.venv-datagen/bin/python scripts/datagen/can_nav_pnp/generate.py --out .data/can_nav_s0 --num-episodes 32 --seed-start 0 --threads 2
+.venv-datagen/bin/python scripts/datagen/can_nav_pnp/merge_shards.py --out .data/can_nav_160 .data/can_nav_s0 ...
 
-# tỉ lệ thành công / lý do loại theo từng pha
-.venv-datagen/bin/python scripts/datagen/box_pnp/summarize_log.py .data/box_pnp_s0
+# 3. export for both models (same --seed -> same validation episodes)
+.venv-datagen/bin/python scripts/datagen/can_nav_pnp/export_psi0.py  .data/can_nav_160 --out .data/psi0  --zip
+.venv-datagen/bin/python scripts/datagen/can_nav_pnp/export_gr00t.py .data/can_nav_160 --out .data/gr00t --zip
+
+# 4. finetune and serve on Colab (notebooks in scripts/datagen/can_nav_pnp/), then evaluate closed loop
+.venv-datagen/bin/python scripts/datagen/can_nav_pnp/closed_loop_eval.py --server http://HOST:PORT --episodes 10
+.venv-datagen/bin/python scripts/datagen/can_nav_pnp/closed_loop_eval.py --gr00t HOST:PORT --episodes 10
 ```
 
-**2. Export cho Ψ₀**
+Every step, option and notebook is described in [scripts/datagen/can_nav_pnp/README.md](scripts/datagen/can_nav_pnp/README.md).
 
-```bash
-.venv-datagen/bin/python scripts/datagen/box_pnp/export_psi0.py .data/box_pnp_tray_140 --out .data/psi0 --zip
-```
+## Earlier tasks
 
-Lệnh tạo các pack `<name>_train` / `<name>_val`, video 320×240, cùng file `.data/psi0/box_pnp_tray_140_psi0.zip`.
-Tải file zip lên `My Drive/psi0/` của tài khoản sẽ chạy Colab.
+- **`box_pnp`**: pick a box off a pedestal and place it in the tray. A Ψ₀ checkpoint finetuned for about 8,000 steps on
+  126 episodes succeeded in **1/10** unseen scenes, with most failures at the grasp. That dataset was generated with
+  SONIC 1.0 and needs to be regenerated with 1.1.
+- **`can_pnp`**: squat, pick a can off a low stand, walk to the table and place it in the tray. It requires SONIC 1.1,
+  because 1.0 does not lower the body and arms far enough. See [scripts/datagen/can_pnp/README.md](scripts/datagen/can_pnp/README.md).
 
-**3. Finetune trên Colab**: [`colab_finetune_psi0.ipynb`](scripts/datagen/box_pnp/colab_finetune_psi0.ipynb)
+## Notes
 
-- Chạy lần lượt các cell 1 → 9. Cell 9 phải được giữ chạy, vì nó vừa train vừa tải checkpoint lên Drive.
-- Warm start từ `sonic-wbcbox` ckpt 40000. Global batch 128. Mặc định `MAX_STEPS` = 15000; 8000 là đủ để thử.
-- GPU L4 dùng torch cu126 + flash-attn. GPU G4 (RTX PRO 6000 Blackwell) dùng torch cu128 + SDPA. Cell 3 tự chọn.
-- Checkpoint nằm ở `My Drive/psi0/runs/finetune/<run>/checkpoints/ckpt_<N>/`. Nếu Colab ngắt, chạy lại notebook là tự resume.
-- Khóa W&B (nếu dùng) đặt trong **Colab Secrets**, không ghi vào notebook.
+- **State order (43):** legs 12, waist 3, left arm 7, right arm 7, left hand 7, right hand 7. `export_psi0.py` permutes
+  the MJCF `qpos[7:50]` by joint name. The state descriptions in `docs/sonic_pick_can/01` and `02` predate a re-check;
+  where they differ, trust the code.
+- **Grasp assist:** the Dex3 model cannot hold an object on its own, so a soft weld attaches it once the fingers make
+  contact. It is used both for data generation and evaluation.
+- **SONIC version:** SONIC 1.1 (`sonic_v1_1`) is the default (`SONIC_VARIANT`). `meta/info.json` records
+  `sonic_version`; the data, the finetuned checkpoint and the decoder used for evaluation must all match.
 
-**4. Đánh giá closed-loop**
+## Credits
 
-- Trên Colab, chạy [`colab_psi0_server.ipynb`](scripts/datagen/box_pnp/colab_psi0_server.ipynb), cell 1 → 7. Notebook tải checkpoint từ Drive,
-  chạy `serve_psi0_sonic_http`, mở tunnel Pinggy rồi in ra lệnh để chạy ở máy local.
-- Trên máy local:
-
-```bash
-.venv-datagen/bin/python scripts/datagen/box_pnp/closed_loop_eval.py --server http://HOST:PORT --episodes 10 --out .data/eval/run1
-```
-
-  - `--viewer` mở cửa sổ MuJoCo để xem trực tiếp.
-  - `--video` ghi mp4 cho từng episode. Tùy chọn này chậm vì phải render mỗi khung hình, nên chỉ dùng cho vài episode.
-  - Seed đánh giá bắt đầu từ 1 000 000, không trùng với dữ liệu train.
-  - Kiểm tra pipeline mà không cần model: `--replay .data/box_pnp_tray_140 --replay-episode 0` phát lại action đã ghi.
-  - `results.jsonl` ghi kết quả từng episode, kèm chẩn đoán: gắp lúc nào, thùng được nâng bao cao, cuối episode thùng nằm ở đâu.
-
-## Kết quả hiện tại
-
-Checkpoint finetune khoảng 8000 bước trên 126 episode train: **1/10** cảnh chưa thấy thành công. Phần lớn lỗi nằm ở
-**bước gắp**: trượt thùng rồi loay hoay đến hết 60 s, hoặc làm rơi thùng. Khi đã gắp được thì robot thường mang đi và
-đặt vào khay thành công. Hướng cải thiện tiếp:
-
-- Chạy với `--exec-steps 8` để model lập lại kế hoạch thường hơn.
-- Thêm dữ liệu cho bước gắp.
-- So sánh nhiều checkpoint.
-
-## Ghi chú
-
-- **Thứ tự state (43):** chân 12, eo 3, tay trái 7, tay phải 7, bàn tay trái 7, bàn tay phải 7. `export_psi0.py`
-  hoán vị `qpos[7:50]` của MJCF theo tên khớp. Phần mô tả thứ tự state trong `docs/sonic_pick_can/01` và `02` được viết
-  trước khi kiểm tra lại, nên khi hai nơi khác nhau thì tin theo code.
-- **Grasp assist:** khi tay phải khép ≥ 30%, có tiếp xúc và hộp nằm trong lòng bàn tay, một weld mềm giữ hộp. Mô hình
-  Dex3 tự nó không giữ nổi hộp. Cơ chế này được dùng cả khi sinh dữ liệu lẫn khi đánh giá.
-- **Phiên bản SONIC:** mặc định SONIC 1.1 (`sonic_v1_1`), khớp với các script trong `real/SONIC` của Psi0. `meta/info.json`
-  ghi `sonic_version`; dữ liệu, checkpoint finetune và decoder khi deploy/đánh giá phải cùng một phiên bản.
-- `colab_gr00t_*.ipynb` là các notebook cũ dùng cho GR00T, giữ lại để tham khảo.
-
-Code của Psi0 gốc theo license của repo đó.
+`box_pnp` and the first version of `can_pnp` were written by Nguyen Duy Hoang ([ndhoang2k5/psi0](https://github.com/ndhoang2k5/psi0)).
+Psi0 and GR00T-WholeBodyControl code is under the licenses of their own repos.
