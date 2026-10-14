@@ -14,19 +14,23 @@ Repo gồm:
 Có hai task:
 
 - **`box_pnp`**: gắp hộp trên bệ. Code mặc định dùng SONIC 1.1; dataset 140 episode và model đã finetune hiện có được sinh bằng SONIC 1.0 (cần sinh lại).
-- **`can_pnp`** (mới): ngồi xổm nhặt lon trên sàn cạnh chân phải, đứng dậy, đi tới bàn, đặt lon vào khay. Task này **bắt buộc
-  dùng SONIC 1.1**, vì SONIC 1.0 không với tới được vật nằm ở độ cao sàn. Xem
-  [scripts/datagen/can_pnp/README.md](scripts/datagen/can_pnp/README.md).
+- **`can_pnp`**: ngồi xổm nhặt lon trên bục thấp, đứng dậy, đi tới bàn, đặt lon vào khay. Task này **bắt buộc dùng SONIC 1.1**,
+  vì SONIC 1.0 không hạ người và tay đủ thấp. Xem [scripts/datagen/can_pnp/README.md](scripts/datagen/can_pnp/README.md).
+- **`can_nav_pnp`** (task hiện tại): đi vòng qua vật cản, rồi làm task `can_pnp`. Dữ liệu dùng cho cả **Ψ₀** và **GR00T N1.7**;
+  có notebook finetune, server và gói sinh dữ liệu trên Colab. Xem
+  [scripts/datagen/can_nav_pnp/README.md](scripts/datagen/can_nav_pnp/README.md) và
+  [docs/sonic_pick_can/06_memo_can_nav_pnp.md](docs/sonic_pick_can/06_memo_can_nav_pnp.md).
 
 Repo chỉ chứa phần thêm vào. Nó chạy bên trong một bản checkout của Psi0 gốc, đặt đúng các thư mục sau:
 
 ```
 scripts/datagen/box_pnp/    task hộp: code sinh dữ liệu, export, đánh giá, notebook Colab
-scripts/datagen/can_pnp/    task lon trên sàn (SONIC 1.1): sinh dữ liệu, export, đánh giá
+scripts/datagen/can_pnp/    task lon trên bục (SONIC 1.1): sinh dữ liệu, export, đánh giá
+scripts/datagen/can_nav_pnp/ đi vòng vật cản + task lon: sinh dữ liệu (local/Colab), export Ψ₀ + GR00T, notebook, đánh giá
 docs/sonic_pick_can/        ghi chú: pipeline, kế hoạch finetune/kiểm thử, báo cáo các lần chạy
 ```
 
-## Cài đặt (máy local, Windows hoặc Linux)
+## Cài đặt (máy local Ubuntu)
 
 ```bash
 git clone https://github.com/physical-superintelligence-lab/Psi0.git
@@ -42,12 +46,17 @@ git clone https://github.com/ndhoang2k5/psi0.git /tmp/psi0-boxpnp
 cp -r /tmp/psi0-boxpnp/scripts/datagen scripts/
 mkdir -p docs && cp -r /tmp/psi0-boxpnp/docs/sonic_pick_can docs/
 
-# môi trường cho sinh dữ liệu / đánh giá (Python 3.11)
-python -m venv .venv-datagen
-.venv-datagen/Scripts/python -m pip install mujoco==3.14.0 numpy onnxruntime imageio imageio-ffmpeg pandas pyarrow pillow scipy matplotlib
+# môi trường cho sinh dữ liệu / đánh giá (Python 3.11), cài bằng uv (venv này không có pip)
+curl -LsSf https://astral.sh/uv/install.sh | sh     # nếu chưa có uv
+uv venv --python 3.11 .venv-datagen
+uv pip install --python .venv-datagen/bin/python mujoco==3.14.0 numpy onnxruntime imageio imageio-ffmpeg \
+    pandas pyarrow pillow scipy matplotlib
+# chỉ cần khi đánh giá GR00T (closed_loop_eval.py --gr00t)
+uv pip install --python .venv-datagen/bin/python pyzmq msgpack
 ```
 
-Trên Linux thay `.venv-datagen/Scripts/python` bằng `.venv-datagen/bin/python`.
+Các lệnh bên dưới chạy trong terminal, ở thư mục gốc của repo (`cd ~/Code/PSI/psi0`). Máy không có màn hình (SSH) thì thêm
+`MUJOCO_GL=egl` (có GPU) hoặc `MUJOCO_GL=osmesa` trước lệnh, và không dùng `--viewer`.
 
 ## Quy trình
 
@@ -55,21 +64,21 @@ Trên Linux thay `.venv-datagen/Scripts/python` bằng `.venv-datagen/bin/python
 
 ```bash
 # xem trước 1 episode (video + biểu đồ để kiểm tra)
-.venv-datagen/Scripts/python scripts/datagen/box_pnp/generate.py --out .data/box_pnp_preview --num-episodes 1 --review
+.venv-datagen/bin/python scripts/datagen/box_pnp/generate.py --out .data/box_pnp_preview --num-episodes 1 --review
 
 # chạy thật: chia shard theo dải seed, rồi gộp
-.venv-datagen/Scripts/python scripts/datagen/box_pnp/generate.py --out .data/box_pnp_s0 --num-episodes 70 --seed-start 0
-.venv-datagen/Scripts/python scripts/datagen/box_pnp/generate.py --out .data/box_pnp_s1 --num-episodes 70 --seed-start 100000
-.venv-datagen/Scripts/python scripts/datagen/box_pnp/merge_shards.py --out .data/box_pnp_tray_140 .data/box_pnp_s0 .data/box_pnp_s1
+.venv-datagen/bin/python scripts/datagen/box_pnp/generate.py --out .data/box_pnp_s0 --num-episodes 70 --seed-start 0
+.venv-datagen/bin/python scripts/datagen/box_pnp/generate.py --out .data/box_pnp_s1 --num-episodes 70 --seed-start 100000
+.venv-datagen/bin/python scripts/datagen/box_pnp/merge_shards.py --out .data/box_pnp_tray_140 .data/box_pnp_s0 .data/box_pnp_s1
 
 # tỉ lệ thành công / lý do loại theo từng pha
-.venv-datagen/Scripts/python scripts/datagen/box_pnp/summarize_log.py .data/box_pnp_s0
+.venv-datagen/bin/python scripts/datagen/box_pnp/summarize_log.py .data/box_pnp_s0
 ```
 
 **2. Export cho Ψ₀**
 
 ```bash
-.venv-datagen/Scripts/python scripts/datagen/box_pnp/export_psi0.py .data/box_pnp_tray_140 --out .data/psi0 --zip
+.venv-datagen/bin/python scripts/datagen/box_pnp/export_psi0.py .data/box_pnp_tray_140 --out .data/psi0 --zip
 ```
 
 Lệnh tạo các pack `<name>_train` / `<name>_val`, video 320×240, cùng file `.data/psi0/box_pnp_tray_140_psi0.zip`.
@@ -90,7 +99,7 @@ Tải file zip lên `My Drive/psi0/` của tài khoản sẽ chạy Colab.
 - Trên máy local:
 
 ```bash
-.venv-datagen/Scripts/python scripts/datagen/box_pnp/closed_loop_eval.py --server http://HOST:PORT --episodes 10 --out .data/eval/run1
+.venv-datagen/bin/python scripts/datagen/box_pnp/closed_loop_eval.py --server http://HOST:PORT --episodes 10 --out .data/eval/run1
 ```
 
   - `--viewer` mở cửa sổ MuJoCo để xem trực tiếp.
